@@ -1,0 +1,251 @@
+name: iOS CI & TestFlight Release (TAD Attend)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-ci-release.yml"
+    tags:
+      - "V1.0.*"
+  pull_request:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-ci-release.yml"
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Tag phiên bản phát hành (ví dụ: V1.0.1.08112026)"
+        required: false
+        default: ""
+      build_number:
+        description: "Số build tăng dần cho TestFlight (CURRENT_PROJECT_VERSION). Để trống = github.run_number"
+        required: false
+        default: ""
+      upload_to_testflight:
+        description: "Đẩy bản build lên TestFlight (true/false)"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROJECT: FaceAttendance.xcodeproj
+  SCHEME: FaceAttendance
+  APP_NAME: FaceAttendance
+
+jobs:
+  # Mode 1: build unsigned (mọi PR / push).
+  # Mode 2: ký số .ipa + đẩy TestFlight ngay trên cùng runner khi đủ 6 Apple secrets.
+  ios-build-and-release:
+    name: "Build (unsigned) & optional TestFlight upload"
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      APPLE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+      APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+      APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      APP_STORE_CONNECT_API_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_API_KEY_BASE64 }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Show Xcode & macOS environment
+        run: |
+          sw_vers
+          xcodebuild -version
+
+      - name: Install XcodeGen & generate Xcode project
+        working-directory: ios
+        run: |
+          command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
+          xcodegen generate
+          xcodebuild -list -project "$PROJECT"
+
+      - name: Build Release (unsigned, generic iOS device)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" | tee build/xcodebuild.log | grep -E "error:|warning: |BUILD (SUCCEEDED|FAILED)" || true
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log
+
+      - name: Package unsigned .ipa for inspection
+        working-directory: ios
+        run: |
+          mkdir -p build/artifacts build/ipa/Payload
+          APP_PATH="build/DerivedData/Build/Products/Release-iphoneos/${APP_NAME}.app"
+          test -d "$APP_PATH"
+          cp -R "$APP_PATH" build/ipa/Payload/
+          ditto -c -k --sequesterRsrc build/ipa "build/artifacts/TAD-Attend-unsigned.ipa"
+          shasum -a 256 build/artifacts/*
+
+      - name: Upload unsigned build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-unsigned-${{ github.sha }}
+          path: ios/build/artifacts/*.ipa
+          if-no-files-found: error
+
+      # ======================= Mode 2: signed IPA + TestFlight =======================
+      - name: Check Apple Developer secrets
+        id: check_secrets
+        run: |
+          if [ -n "$APPLE_CERTIFICATE_BASE64" ] && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] && \
+             [ -n "$APPLE_PROVISIONING_PROFILE_BASE64" ] && [ -n "$APP_STORE_CONNECT_API_KEY_ID" ] && \
+             [ -n "$APP_STORE_CONNECT_ISSUER_ID" ] && [ -n "$APP_STORE_CONNECT_API_KEY_BASE64" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Apple secrets chưa cấu hình - bỏ qua bước ký số & TestFlight."
+          fi
+
+      - name: Resolve version & build number
+        if: steps.check_secrets.outputs.configured == 'true'
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version_tag }}" ]; then
+            RAW_TAG="${{ inputs.version_tag }}"
+          elif [[ "${{ github.ref }}" == refs/tags/V* ]]; then
+            RAW_TAG="${GITHUB_REF#refs/tags/}"
+          else
+            RAW_TAG="V1.0.1.$(TZ=Asia/Ho_Chi_Minh date +%d%m%Y)"
+          fi
+          FULL_VER="${RAW_TAG#V}"
+          MARKETING_VER=$(echo "$FULL_VER" | awk -F. '{if (NF>=3) print $1"."$2"."$3; else print $0}')
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.build_number }}" ]; then
+            BUILD_NUM="${{ inputs.build_number }}"
+          else
+            BUILD_NUM="${{ github.run_number }}"
+          fi
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "full_version=$FULL_VER" >> "$GITHUB_OUTPUT"
+          echo "marketing_version=$MARKETING_VER" >> "$GITHUB_OUTPUT"
+          echo "build_number=$BUILD_NUM" >> "$GITHUB_OUTPUT"
+          echo "ipa_filename=TAD-Attend-${RAW_TAG}.ipa" >> "$GITHUB_OUTPUT"
+
+      - name: Import distribution certificate & provisioning profile
+        if: steps.check_secrets.outputs.configured == 'true'
+        id: signing
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/tad-signing.keychain-db"
+          KEYCHAIN_PASS="$(uuidgen)"
+          CERT_PATH="$RUNNER_TEMP/dist_cert.p12"
+          PROFILE_PATH="$RUNNER_TEMP/profile.mobileprovision"
+          PROFILE_PLIST="$RUNNER_TEMP/profile.plist"
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERT_PATH"
+          echo "$APPLE_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          security create-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASS" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          security cms -D -i "$PROFILE_PATH" > "$PROFILE_PLIST"
+          PROFILE_UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" "$PROFILE_PLIST")
+          TEAM_ID=$(/usr/libexec/PlistBuddy -c "Print TeamIdentifier:0" "$PROFILE_PLIST")
+          APP_ID=$(/usr/libexec/PlistBuddy -c "Print Entitlements:application-identifier" "$PROFILE_PLIST")
+          BUNDLE_ID="${APP_ID#${TEAM_ID}.}"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$PROFILE_PATH" "$HOME/Library/MobileDevice/Provisioning Profiles/${PROFILE_UUID}.mobileprovision"
+          echo "profile_uuid=$PROFILE_UUID" >> "$GITHUB_OUTPUT"
+          echo "team_id=$TEAM_ID" >> "$GITHUB_OUTPUT"
+          echo "bundle_id=$BUNDLE_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Archive & export signed .ipa
+        if: steps.check_secrets.outputs.configured == 'true'
+        working-directory: ios
+        run: |
+          ARCHIVE_PATH="$RUNNER_TEMP/TADAttend.xcarchive"
+          EXPORT_DIR="$RUNNER_TEMP/export"
+          EXPORT_PLIST="$RUNNER_TEMP/ExportOptions.plist"
+          cat > "$EXPORT_PLIST" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key><string>app-store</string>
+              <key>teamID</key><string>${{ steps.signing.outputs.team_id }}</string>
+              <key>signingStyle</key><string>manual</string>
+              <key>uploadSymbols</key><true/>
+              <key>provisioningProfiles</key>
+              <dict>
+                  <key>${{ steps.signing.outputs.bundle_id }}</key>
+                  <string>${{ steps.signing.outputs.profile_uuid }}</string>
+              </dict>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$ARCHIVE_PATH" \
+            PRODUCT_BUNDLE_IDENTIFIER="${{ steps.signing.outputs.bundle_id }}" \
+            MARKETING_VERSION="${{ steps.version.outputs.marketing_version }}" \
+            CURRENT_PROJECT_VERSION="${{ steps.version.outputs.build_number }}" \
+            DEVELOPMENT_TEAM="${{ steps.signing.outputs.team_id }}" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="${{ steps.signing.outputs.profile_uuid }}"
+          xcodebuild -exportArchive -archivePath "$ARCHIVE_PATH" -exportOptionsPlist "$EXPORT_PLIST" -exportPath "$EXPORT_DIR"
+          FOUND_IPA=$(find "$EXPORT_DIR" -name "*.ipa" | head -n 1)
+          cp "$FOUND_IPA" "$RUNNER_TEMP/${{ steps.version.outputs.ipa_filename }}"
+          shasum -a 256 "$RUNNER_TEMP/${{ steps.version.outputs.ipa_filename }}"
+
+      - name: Upload signed .ipa artifact
+        if: steps.check_secrets.outputs.configured == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-signed-${{ steps.version.outputs.tag }}-b${{ steps.version.outputs.build_number }}
+          path: ${{ runner.temp }}/${{ steps.version.outputs.ipa_filename }}
+
+      - name: Create or update GitHub Release
+        if: steps.check_secrets.outputs.configured == 'true' && github.event_name != 'pull_request' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/V1.0.'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          IPA_PATH="$RUNNER_TEMP/${{ steps.version.outputs.ipa_filename }}"
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$IPA_PATH" --clobber
+          else
+            gh release create "$TAG" "$IPA_PATH" --title "TAD Attend iOS $TAG (Build ${{ steps.version.outputs.build_number }})" \
+              --notes "MARKETING_VERSION: ${{ steps.version.outputs.marketing_version }} - BUILD: ${{ steps.version.outputs.build_number }}"
+          fi
+
+      - name: Upload .ipa to TestFlight
+        if: steps.check_secrets.outputs.configured == 'true' && github.event_name != 'pull_request' && inputs.upload_to_testflight != 'false'
+        run: |
+          mkdir -p "$HOME/.appstoreconnect/private_keys"
+          KEY_FILE="$HOME/.appstoreconnect/private_keys/AuthKey_${APP_STORE_CONNECT_API_KEY_ID}.p8"
+          echo "$APP_STORE_CONNECT_API_KEY_BASE64" | base64 --decode > "$KEY_FILE"
+          chmod 600 "$KEY_FILE"
+          xcrun altool --upload-app --type ios \
+            -f "$RUNNER_TEMP/${{ steps.version.outputs.ipa_filename }}" \
+            --apiKey "$APP_STORE_CONNECT_API_KEY_ID" --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID"
+
+      - name: Clean up keychain & API key
+        if: always() && steps.check_secrets.outputs.configured == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/tad-signing.keychain-db" || true
+          rm -rf "$HOME/.appstoreconnect/private_keys" || true
+          rm -f "$RUNNER_TEMP/dist_cert.p12" "$RUNNER_TEMP/profile.mobileprovision" || true
