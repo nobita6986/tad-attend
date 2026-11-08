@@ -1,0 +1,35 @@
+name: FaceAttendance
+options:
+  bundleIdPrefix: vn.tad
+  deploymentTarget:
+    iOS: '16.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    TARGETED_DEVICE_FAMILY: '1'
+    PRODUCT_BUNDLE_IDENTIFIER: vn.tad.attend
+    MARKETING_VERSION: '1.0.0'
+    CURRENT_PROJECT_VERSION: '1'
+    GENERATE_INFOPLIST_FILE: 'YES'
+    INFOPLIST_KEY_CFBundleDisplayName: 'TAD Attend'
+    INFOPLIST_KEY_UILaunchScreen_Generation: 'YES'
+    INFOPLIST_KEY_UISupportedInterfaceOrientations: 'UIInterfaceOrientationPortrait'
+    INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: 'NO'
+    INFOPLIST_KEY_NSCameraUsageDescription: 'Camera trước dùng đăng ký khuôn mặt và chấm công theo sự đồng ý của nhân viên.'
+    INFOPLIST_KEY_UIApplicationSupportsDocumentBrowser: 'NO'
+    INFOPLIST_KEY_NSFaceIDUsageDescription: 'Ứng dụng KHÔNG sử dụng Face ID của hệ điều hành.'
+    IPHONEOS_DEPLOYMENT_TARGET: '16.0'
+    ENABLE_BITCODE: 'NO'
+targets:
+  FaceAttendance:
+    type: application
+    platform: iOS
+    sources:
+      - path: FaceAttendance/Sources
+      - path: FaceAttendance/Resources
+    settings:
+      base:
+        INFOPLIST_KEY_UIRequiredDeviceCapabilities: 'arm64'
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme: {}
