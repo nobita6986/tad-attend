@@ -14,6 +14,7 @@ settings:
     INFOPLIST_KEY_CFBundleDisplayName: 'TAD Attend'
     INFOPLIST_KEY_UILaunchScreen_Generation: 'YES'
     INFOPLIST_KEY_UISupportedInterfaceOrientations: 'UIInterfaceOrientationPortrait'
+    INFOPLIST_KEY_UIRequiresFullScreen: 'YES'
     INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: 'NO'
     INFOPLIST_KEY_NSCameraUsageDescription: 'Camera trước dùng đăng ký khuôn mặt và chấm công theo sự đồng ý của nhân viên.'
     INFOPLIST_KEY_UIApplicationSupportsDocumentBrowser: 'NO'

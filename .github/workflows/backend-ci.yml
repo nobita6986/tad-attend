@@ -88,7 +88,7 @@ jobs:
           cp .env.example .env
           php artisan key:generate --ansi
       - name: Run tests
-        run: php artisan test
+        run: vendor/bin/phpunit --colors=always
 
   mysql:
     name: Migrations on MySQL 8.0
