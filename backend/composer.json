@@ -9,6 +9,8 @@
     "phpoffice/phpspreadsheet": "^5.0"
   },
   "require-dev": {
+    "fakerphp/faker": "^1.24",
+    "mockery/mockery": "^1.6",
     "phpunit/phpunit": "^12.0"
   },
   "autoload": {
@@ -22,7 +24,7 @@
       "Illuminate\\Foundation\\ComposerScripts::postAutoloadDump",
       "@php artisan package:discover --ansi"
     ],
-    "test": ["@php artisan test"]
+    "test": ["@php vendor/bin/phpunit"]
   },
   "config": {
     "optimize-autoloader": true,
