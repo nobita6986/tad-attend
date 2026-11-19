@@ -1,3 +1,4 @@
+import java.io.File
 import java.net.URI
 import java.security.MessageDigest
 
@@ -14,7 +15,7 @@ val sfaceModelSha256 =
     "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79"
 val sfaceModelFile = file("src/main/assets/models/face_recognition_sface_2021dec.onnx")
 
-fun sha256Of(file: java.io.File): String {
+fun sha256Of(file: File): String {
     val md = MessageDigest.getInstance("SHA-256")
     file.inputStream().use { input ->
         val buf = ByteArray(8192)
@@ -37,7 +38,7 @@ val ensureSfaceModel by tasks.registering {
             return@doLast
         }
         logger.lifecycle("Downloading OpenCV Zoo SFace ONNX model (Apache-2.0)...")
-        val tmp = java.io.File(sfaceModelFile.parentFile, "${sfaceModelFile.name}.tmp")
+        val tmp = File(sfaceModelFile.parentFile, "${sfaceModelFile.name}.tmp")
         URI(sfaceModelUrl).toURL().openStream().use { input ->
             tmp.outputStream().use { output -> input.copyTo(output) }
         }
