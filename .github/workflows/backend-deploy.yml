@@ -1,0 +1,101 @@
+name: Backend Deploy (VPS)
+
+on:
+  workflow_run:
+    workflows: ["Backend CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & Deploy Laravel backend to VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_PORT: ${{ secrets.VPS_PORT }}
+
+    steps:
+      - name: Check deploy secrets
+        id: check
+        run: |
+          if [ -n "$VPS_HOST" ] && [ -n "$VPS_USER" ] && [ -n "$VPS_SSH_KEY" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::VPS deploy secrets (VPS_HOST/VPS_USER/VPS_SSH_KEY) chưa cấu hình - bỏ qua bước deploy."
+          fi
+
+      - name: Checkout target commit on main
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup PHP 8.3 & Composer
+        if: steps.check.outputs.configured == 'true'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: mbstring, dom, xml, xmlreader, xmlwriter, simplexml, gd, zip, zlib, iconv, fileinfo, openssl, pdo, pdo_mysql, intl, bcmath
+          coverage: none
+          tools: composer:v2
+
+      - name: Install production dependencies
+        if: steps.check.outputs.configured == 'true'
+        working-directory: backend
+        run: composer install --no-dev --optimize-autoloader --no-interaction --no-progress --prefer-dist
+
+      - name: Package backend release archive
+        if: steps.check.outputs.configured == 'true'
+        id: pkg
+        run: |
+          SHA="$(git rev-parse --short=12 HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          tar -czf "/tmp/release-${SHA}.tar.gz" \
+            --exclude='backend/.env' \
+            --exclude='backend/.env.*' \
+            --exclude='backend/storage' \
+            --exclude='backend/tests' \
+            --exclude='backend/phpunit.xml' \
+            backend
+          ls -lh "/tmp/release-${SHA}.tar.gz"
+
+      - name: Configure SSH client
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          PORT="${VPS_PORT:-22}"
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$VPS_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+          ssh-keyscan -p "$PORT" -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          chmod 644 "$HOME/.ssh/known_hosts"
+
+      - name: Upload release & run atomic deploy on VPS
+        if: steps.check.outputs.configured == 'true'
+        run: |
+          PORT="${VPS_PORT:-22}"
+          SHA="${{ steps.pkg.outputs.sha }}"
+          scp -i "$HOME/.ssh/deploy_key" -P "$PORT" -o BatchMode=yes \
+            "/tmp/release-${SHA}.tar.gz" \
+            "${VPS_USER}@${VPS_HOST}:/var/www/tad-attend/incoming/release-${SHA}.tar.gz"
+          ssh -i "$HOME/.ssh/deploy_key" -p "$PORT" -o BatchMode=yes \
+            "${VPS_USER}@${VPS_HOST}" \
+            "sudo /usr/local/sbin/tad-attend-deploy.sh ${SHA}"
+
+      - name: Cleanup temporary SSH key
+        if: always()
+        run: rm -f "$HOME/.ssh/deploy_key" /tmp/release-*.tar.gz

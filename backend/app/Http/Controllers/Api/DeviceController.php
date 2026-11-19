@@ -28,6 +28,7 @@ class DeviceController extends Controller
             'server_time' => now('UTC')->toIso8601String(),
             'model_id' => config('attendance.model_id'),
             'model_version' => config('attendance.model_version'),
+            'embedding_dimensions' => config('attendance.embedding_dimensions'),
             'min_score' => config('attendance.min_score'),
         ]);
     }
@@ -91,7 +92,7 @@ class DeviceController extends Controller
             'captured_at' => ['required', 'date'],
             'match_score' => ['required', 'numeric', 'between:0,1'],
             'liveness_passed' => ['required', 'accepted'],
-            'liveness_method' => ['required', 'string', 'in:arkit_head_turn'],
+            'liveness_method' => ['required', 'string', 'in:arkit_head_turn,mlkit_head_turn'],
             'model_id' => ['required', 'string', 'max:80'],
             'model_version' => ['required', 'string', 'max:40'],
             'offline' => ['required', 'boolean'],

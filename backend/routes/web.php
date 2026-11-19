@@ -31,5 +31,6 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin.only'])->grou
     Route::get('/reports/export-detail', [ReportController::class, 'exportDetail'])->name('reports.detail');
     Route::get('/reports/export-summary', [ReportController::class, 'exportSummary'])->name('reports.summary');
     Route::get('/devices', [DeviceAdminController::class, 'index'])->name('devices.index');
+    Route::post('/devices', [DeviceAdminController::class, 'store'])->name('devices.store');
     Route::post('/devices/{device}/revoke', [DeviceAdminController::class, 'revoke'])->name('devices.revoke');
 });

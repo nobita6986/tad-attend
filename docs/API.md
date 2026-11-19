@@ -2,7 +2,7 @@
 Base URL: `https://YOUR_DOMAIN/api/v1`. JSON trừ API upload multipart. Lỗi theo JSON HTTP 4xx/5xx. Token mỗi thiết bị.
 
 ## GET /device
-Response: `{ "device_id":"uuid", "name":"Cổng 1", "direction":"in", "server_time":"2026-11-08T00:00:00Z", "min_score":0.75, "model_id":"your-face-model", "model_version":"1" }`.
+Response: `{ "device_id":"uuid", "name":"Cổng 1", "direction":"in", "server_time":"2026-11-08T00:00:00Z", "min_score":0.42, "model_id":"sface", "model_version":"2021dec", "embedding_dimensions":128 }`.
 `min_score` chỉ là cấu hình kỹ thuật **không phải** ngưỡng dùng thực tế nếu chưa hiệu chuẩn.
 
 ## GET /roster?model_id=...&model_version=...
@@ -19,7 +19,7 @@ Response: `{ "employee_id":1,"enrolled_at":"..." }` (201).
 - `captured_at`: ISO-8601 kèm offset/Z
 - `match_score`: float [0,1]
 - `liveness_passed`: true
-- `liveness_method`: `arkit_head_turn` (MVP; chưa chứng nhận PAD)
+- `liveness_method`: `arkit_head_turn` (iOS) hoặc `mlkit_head_turn` (Android) (MVP; chưa chứng nhận PAD)
 - `model_id`, `model_version`: giống template đã đăng ký
 - `offline`: `0` hoặc `1`
 - `image`: JPEG <= 250KB (đề xuất resize 800 px trước POST)
