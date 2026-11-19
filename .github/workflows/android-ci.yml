@@ -1,0 +1,84 @@
+name: Android CI (TAD Attend)
+
+# Chạy unit tests, lint và build file cài đặt .apk (kèm model SFace ONNX đã kiểm SHA-256).
+# Tải APK về máy Windows: .\scripts\download-apk.ps1
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "android/**"
+      - ".github/workflows/android-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  SFACE_SHA256: 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+  GRADLE_VERSION: "8.10.2"
+
+jobs:
+  android-build-and-test:
+    name: Unit tests · Lint · Assemble APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache OpenCV Zoo SFace ONNX model
+        uses: actions/cache@v4
+        with:
+          path: android/app/src/main/assets/models/face_recognition_sface_2021dec.onnx
+          key: sface-onnx-${{ env.SFACE_SHA256 }}
+
+      - name: Setup Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          gradle-home-cache-cleanup: true
+
+      - name: Run unit tests
+        working-directory: android
+        run: gradle :app:testDebugUnitTest --console=plain
+
+      - name: Run Android Lint (debug)
+        working-directory: android
+        run: gradle :app:lintDebug --console=plain
+
+      - name: Assemble debug APK (with bundled SFace ONNX)
+        working-directory: android
+        run: gradle :app:assembleDebug --console=plain
+
+      - name: Export versioned APK artifact
+        working-directory: android
+        run: |
+          VER="$(grep -E 'versionName\s*=' app/build.gradle.kts | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          mkdir -p build/artifacts
+          OUT="build/artifacts/TAD-Attend-V${VER}-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$OUT"
+          ls -lh "$OUT"
+          sha256sum "$OUT"
+          echo "apk_tag=V${VER}" >> "$GITHUB_ENV"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ env.apk_tag }}
+          path: android/build/artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 30

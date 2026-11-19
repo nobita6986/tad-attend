@@ -1,0 +1,3 @@
+-keepattributes *Annotation*
+-keep class vn.tad.attend.model.** { *; }
+-keep class ai.onnxruntime.** { *; }
