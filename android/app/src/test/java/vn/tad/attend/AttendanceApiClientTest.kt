@@ -77,8 +77,8 @@ class AttendanceApiClientTest {
         assertEquals("accepted", receipt.reviewState)
         val punchReq = server.takeRequest()
         val bodyText = punchReq.body.readUtf8()
-        assertTrue(bodyText.contains("name=\"liveness_method\"\r\n\r\nmlkit_head_turn"))
-        assertTrue(bodyText.contains("name=\"model_id\"\r\n\r\nsface"))
+        assertTrue(Regex("""name="liveness_method"\r\n(?:[^\r\n]+\r\n)*\r\nmlkit_head_turn""").containsMatchIn(bodyText))
+        assertTrue(Regex("""name="model_id"\r\n(?:[^\r\n]+\r\n)*\r\nsface""").containsMatchIn(bodyText))
         assertTrue(bodyText.contains("filename=\"evidence.jpg\""))
     }
 }
