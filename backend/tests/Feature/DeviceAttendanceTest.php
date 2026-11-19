@@ -68,4 +68,89 @@ class DeviceAttendanceTest extends TestCase
         $this->getJson('/api/v1/device')->assertUnauthorized();
         $this->assertNotNull($person->consent_at);
     }
+
+    public function test_sface_128_enrollment_and_android_mlkit_attendance_with_cooldown(): void
+    {
+        Storage::fake('local');
+        config()->set('attendance.model_id', 'sface');
+        config()->set('attendance.model_version', '2021dec');
+        config()->set('attendance.embedding_dimensions', 128);
+        config()->set('attendance.min_score', 0.42);
+
+        $employee = Employee::create([
+            'code' => 'NV128',
+            'full_name' => 'Trần Thị B',
+            'active' => true,
+            'consent_at' => now('UTC'),
+            'consent_method' => 'signed_form',
+        ]);
+        $deviceToken = bin2hex(random_bytes(32));
+        Device::create([
+            'name' => 'Cổng Android',
+            'direction' => 'in',
+            'token_hash' => hash('sha256', $deviceToken),
+        ]);
+
+        $ticketCode = strtoupper(bin2hex(random_bytes(12)));
+        EnrollmentTicket::create([
+            'employee_id' => $employee->id,
+            'token_hash' => hash('sha256', $ticketCode),
+            'expires_at' => now('UTC')->addMinutes(10),
+        ]);
+
+        // Wrong dimension (512 instead of 128) must be rejected.
+        $wrongVec = array_fill(0, 512, 0.0);
+        $wrongVec[0] = 1.0;
+        $this->withToken($deviceToken)->postJson('/api/v1/enrollments', [
+            'ticket' => $ticketCode,
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'embedding' => $wrongVec,
+        ])->assertUnprocessable();
+
+        // Valid 128-dim L2-normalized SFace embedding succeeds.
+        $vec128 = array_fill(0, 128, 0.0);
+        $vec128[0] = 1.0;
+        $this->withToken($deviceToken)->postJson('/api/v1/enrollments', [
+            'ticket' => $ticketCode,
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'embedding' => $vec128,
+        ])->assertCreated()->assertJsonPath('employee_id', $employee->id);
+
+        // Roster returns the enrolled 128-dim template.
+        $this->withToken($deviceToken)
+            ->getJson('/api/v1/roster?model_id=sface&model_version=2021dec')
+            ->assertOk()
+            ->assertJsonCount(1, 'employees')
+            ->assertJsonCount(128, 'employees.0.template');
+
+        // Android ML Kit head-turn liveness punch succeeds.
+        $this->withToken($deviceToken)->post('/api/v1/attendance', [
+            'event_uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'employee_id' => $employee->id,
+            'captured_at' => now('UTC')->toIso8601String(),
+            'match_score' => '0.68',
+            'liveness_passed' => '1',
+            'liveness_method' => 'mlkit_head_turn',
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'offline' => '0',
+            'image' => UploadedFile::fake()->image('face.jpg', 400, 400),
+        ])->assertCreated()->assertJsonPath('review_state', 'accepted');
+
+        // Second punch with new UUID within 60s cooldown returns 409.
+        $this->withToken($deviceToken)->post('/api/v1/attendance', [
+            'event_uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'employee_id' => $employee->id,
+            'captured_at' => now('UTC')->toIso8601String(),
+            'match_score' => '0.70',
+            'liveness_passed' => '1',
+            'liveness_method' => 'mlkit_head_turn',
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'offline' => '0',
+            'image' => UploadedFile::fake()->image('face.jpg', 400, 400),
+        ])->assertStatus(409);
+    }
 }
