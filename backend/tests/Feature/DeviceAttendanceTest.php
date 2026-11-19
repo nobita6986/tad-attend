@@ -6,6 +6,7 @@ use App\Models\Device;
 use App\Models\Employee;
 use App\Models\EnrollmentTicket;
 use App\Models\FaceTemplate;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Storage;
@@ -91,10 +92,18 @@ class DeviceAttendanceTest extends TestCase
             'token_hash' => hash('sha256', $deviceToken),
         ]);
 
+        $admin = User::create([
+            'name' => 'Admin',
+            'email' => 'ticket-admin@example.com',
+            'password' => \Illuminate\Support\Facades\Hash::make('StrongPass123!'),
+            'is_admin' => true,
+        ]);
+
         $ticketCode = strtoupper(bin2hex(random_bytes(12)));
         EnrollmentTicket::create([
             'employee_id' => $employee->id,
             'token_hash' => hash('sha256', $ticketCode),
+            'created_by' => $admin->id,
             'expires_at' => now('UTC')->addMinutes(10),
         ]);
 
