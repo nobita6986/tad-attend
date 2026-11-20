@@ -9,9 +9,76 @@
 <div class="page-header">
   <div>
     <h1>Thiết bị chấm công</h1>
-    <p class="page-subtitle">Gắn cố định thiết bị theo <strong>Mã máy (Hardware ID)</strong> để tự động kết nối lại sau mỗi lần nâng cấp/cài lại app mà không cần nhập lại token.</p>
+    <p class="page-subtitle">Từ app Android bấm <strong>Đăng ký thiết bị</strong> để thiết bị xuất hiện ở danh sách chờ duyệt bên dưới — quản trị viên chỉ cần bấm <strong>Đồng ý</strong> là máy tự kết nối và nhớ cố định theo Mã máy.</p>
   </div>
 </div>
+
+@if($pendingDevices->isNotEmpty())
+  <section class="card" style="border:1.5px solid #F59E0B;background:#FFFBEB">
+    <div class="card-head">
+      <div>
+        <h2 style="color:#92400E"><x-icon name="alert" :size="18" /> Thiết bị đang chờ duyệt ({{ $pendingDevices->count() }})</h2>
+        <p class="card-subtitle" style="color:#78350F">Kiểm tra Mã máy hiển thị trên màn hình điện thoại, đặt lại tên/chế độ nếu cần rồi bấm <strong>Đồng ý</strong> hoặc <strong>Từ chối</strong>.</p>
+      </div>
+    </div>
+
+    <div tabindex="0" role="region" aria-label="Bảng thiết bị chờ duyệt" class="table-wrapper" style="background:#fff;border-radius:10px">
+      <table>
+        <thead>
+          <tr>
+            <th>Mã máy &amp; Thời gian gửi</th>
+            <th>Tên thiết bị &amp; Chế độ khi duyệt</th>
+            <th>Phê duyệt</th>
+          </tr>
+        </thead>
+        <tbody>
+          @foreach($pendingDevices as $pending)
+            @php($approveFormId = 'approve-device-' . $pending->id)
+            <tr>
+              <td data-label="Mã máy">
+                <div><code style="font-weight:700;color:#1D4ED8">{{ $pending->hardware_id }}</code></div>
+                @if($pending->device_model)
+                  <div class="muted small">{{ $pending->device_model }}</div>
+                @endif
+                <div class="muted small">Gửi lúc: {{ ($pending->requested_at ?? $pending->created_at)?->timezone($tz)->format('d/m/Y H:i:s') }}</div>
+              </td>
+              <td data-label="Tên &amp; Chế độ">
+                <form id="{{ $approveFormId }}" method="post" action="{{ route('admin.devices.approve', $pending) }}" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0">
+                  @csrf
+                  <input
+                    name="name"
+                    value="{{ $pending->name }}"
+                    required
+                    maxlength="120"
+                    aria-label="Tên thiết bị chờ duyệt"
+                    placeholder="Tên thiết bị / vị trí"
+                    style="min-block-size:36px;padding:4px 10px;width:210px"
+                  >
+                  <select name="direction" aria-label="Chế độ thiết bị" style="min-block-size:36px;padding:4px 8px;width:auto">
+                    <option value="both" @selected($pending->direction === 'both')>Vào / Ra (chung)</option>
+                    <option value="in" @selected($pending->direction === 'in')>Chỉ vào (in)</option>
+                    <option value="out" @selected($pending->direction === 'out')>Chỉ ra (out)</option>
+                  </select>
+                </form>
+              </td>
+              <td data-label="Phê duyệt">
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                  <button type="submit" form="{{ $approveFormId }}" class="btn-sm" style="background:#059669;border-color:#059669">
+                    <x-icon name="check" :size="14" /> Đồng ý
+                  </button>
+                  <form method="post" action="{{ route('admin.devices.reject', $pending) }}" onsubmit="return confirm('Từ chối yêu cầu đăng ký của thiết bị này?')" style="margin:0">
+                    @csrf
+                    <button type="submit" class="btn-danger btn-sm">Từ chối</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          @endforeach
+        </tbody>
+      </table>
+    </div>
+  </section>
+@endif
 
 @if(session('issued_device'))
   @php($issued = session('issued_device'))
@@ -102,6 +169,9 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
           <tr>
             <td data-label="Thiết bị">
               <strong>{{ $device->name }}</strong>
+              @if($device->device_model)
+                <div class="muted small">{{ $device->device_model }}</div>
+              @endif
               <div class="muted small"><code>{{ $device->id }}</code></div>
             </td>
             <td data-label="Mã máy &amp; Chế độ">
@@ -131,13 +201,24 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
             </td>
             <td data-label="Kết nối gần nhất" class="num muted">{{ $device->last_seen_at?->timezone($tz)->format('d/m/Y H:i:s') ?? 'Chưa kết nối' }}</td>
             <td data-label="Trạng thái">
-              <x-badge :variant="$device->active ? 'success' : 'danger'">{{ $device->active ? 'Hoạt động' : 'Đã thu hồi' }}</x-badge>
+              @if($device->approval_status === 'rejected')
+                <x-badge variant="warning">Đã từ chối</x-badge>
+              @elseif($device->active)
+                <x-badge variant="success">Hoạt động</x-badge>
+              @else
+                <x-badge variant="danger">Đã thu hồi</x-badge>
+              @endif
             </td>
             <td data-label="Hành động">
               @if($device->active)
                 <form method="post" action="{{ route('admin.devices.revoke', $device) }}" onsubmit="return confirm('Thu hồi ngay quyền chấm công của thiết bị này?')" style="margin:0">
                   @csrf
                   <button class="btn-danger btn-sm" type="submit">Thu hồi</button>
+                </form>
+              @elseif($device->approval_status === 'rejected')
+                <form method="post" action="{{ route('admin.devices.approve', $device) }}" style="margin:0">
+                  @csrf
+                  <button class="btn-outline btn-sm" type="submit">Duyệt lại</button>
                 </form>
               @else
                 <span class="muted small">—</span>

@@ -2,6 +2,7 @@ package vn.tad.attend.security
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Build
 import android.provider.Settings
 import java.util.Locale
 
@@ -15,6 +16,18 @@ object DeviceIdentity {
     fun getHardwareId(context: Context): String {
         val raw = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID).orEmpty()
         return formatHardwareId(raw)
+    }
+
+    fun getDeviceModelLabel(): String {
+        val manufacturer = Build.MANUFACTURER.orEmpty().trim()
+        val model = Build.MODEL.orEmpty().trim()
+        val release = Build.VERSION.RELEASE.orEmpty().trim()
+        val name = when {
+            manufacturer.isEmpty() -> model
+            model.startsWith(manufacturer, ignoreCase = true) -> model
+            else -> "${manufacturer.replaceFirstChar { it.uppercase(Locale.US) }} $model"
+        }.ifBlank { "Android Device" }
+        return if (release.isNotBlank()) "$name (Android $release)" else name
     }
 
     fun formatHardwareId(rawAndroidId: String): String {

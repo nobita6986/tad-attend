@@ -78,6 +78,8 @@ data class AttendUiState(
     val enrollmentStatus: String = "Nhập thông tin nhân viên mới hoặc chọn nhân viên đã có, sau đó chụp 5 mẫu khuôn mặt.",
     val enrollmentError: Boolean = false,
     val hardwareId: String = "",
+    val deviceModelLabel: String = "",
+    val registrationStatus: String? = null,
     val serverUrl: String = BuildConfig.DEFAULT_SERVER_URL,
     val hasToken: Boolean = false,
     val adminPinSet: Boolean = false,
@@ -88,12 +90,14 @@ data class AttendUiState(
 class AttendanceViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SecureStore(application)
     private val hardwareId: String = DeviceIdentity.getHardwareId(application)
+    private val deviceModelLabel: String = DeviceIdentity.getDeviceModelLabel()
     private val api = AttendanceApiClient()
     private val liveness = LivenessTracker()
 
     private val _ui = MutableStateFlow(
         AttendUiState(
             hardwareId = hardwareId,
+            deviceModelLabel = deviceModelLabel,
             serverUrl = store.getServerUrl(),
             hasToken = store.hasDeviceToken(),
             adminPinSet = store.hasAdminPin(),
@@ -113,6 +117,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private var holdFeedbackUntilMs = 0L
 
     private var autoResetJob: Job? = null
+    private var pendingPollJob: Job? = null
 
     private var activeEnrollmentTarget: EnrollmentTarget? = null
     private val enrollmentVectors = mutableListOf<DoubleArray>()
@@ -181,7 +186,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             runCatching {
                 var token = store.getDeviceToken()
                 val info = if (token.isNullOrBlank()) {
-                    val activated = api.activateByHardwareId(url, hardwareId)
+                    val activated = api.activateByHardwareId(url, hardwareId, deviceModelLabel)
                     store.setDeviceToken(activated.token)
                     token = activated.token
                     _ui.update { it.copy(hasToken = true) }
@@ -192,7 +197,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     } catch (e: ApiException) {
                         if (e.statusCode == 401) {
                             // Saved token expired/rotated -> auto re-activate via fixed Hardware ID.
-                            val activated = api.activateByHardwareId(url, hardwareId)
+                            val activated = api.activateByHardwareId(url, hardwareId, deviceModelLabel)
                             store.setDeviceToken(activated.token)
                             token = activated.token
                             _ui.update { it.copy(hasToken = true) }
@@ -224,6 +229,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             }.onSuccess { (info, people, options) ->
                 roster = people
                 autoResetJob?.cancel()
+                pendingPollJob?.cancel()
                 liveness.reset()
                 holdFeedbackUntilMs = 0L
                 enrollmentVectors.clear()
@@ -233,6 +239,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         mode = AppMode.KIOSK,
                         isConnected = true,
                         isConnecting = false,
+                        registrationStatus = "approved",
                         deviceInfo = info,
                         rosterCount = people.size,
                         availableShifts = options.shifts,
@@ -251,15 +258,54 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
             }.onFailure { err ->
-                _ui.update {
-                    it.copy(
-                        isConnected = false,
-                        isConnecting = false,
-                        headline = "Thiết bị chưa kích hoạt hoặc mất mạng",
-                        message = err.message ?: "Kiểm tra lại mạng, URL HTTPS hoặc đăng ký Mã máy trên /admin/devices.",
-                        isError = true,
-                    )
+                applyActivationError(err)
+            }
+        }
+    }
+
+    fun requestAutoRegistration(customName: String = "", serverUrlOverride: String? = null) {
+        if (!serverUrlOverride.isNullOrBlank()) {
+            store.setServerUrl(serverUrlOverride.trim().trimEnd('/'))
+            _ui.update { it.copy(serverUrl = store.getServerUrl()) }
+        }
+        val url = store.getServerUrl()
+        viewModelScope.launch {
+            pendingPollJob?.cancel()
+            _ui.update {
+                it.copy(
+                    isConnecting = true,
+                    headline = "Đang gửi yêu cầu đăng ký...",
+                    message = "Gửi Mã máy $hardwareId lên $url",
+                    isError = false,
+                )
+            }
+            runCatching {
+                api.registerByHardwareId(
+                    baseUrl = url,
+                    hardwareId = hardwareId,
+                    name = customName,
+                    deviceModel = deviceModelLabel,
+                )
+            }.onSuccess { resp ->
+                if (resp.status == "approved" && !resp.token.isNullOrBlank()) {
+                    store.setDeviceToken(resp.token)
+                    _ui.update { it.copy(hasToken = true, registrationStatus = "approved") }
+                    connect()
+                } else {
+                    _ui.update {
+                        it.copy(
+                            isConnected = false,
+                            isConnecting = false,
+                            registrationStatus = "pending",
+                            headline = "Đang chờ quản trị viên duyệt",
+                            message = resp.message ?: "Vào web quản trị → mục Thiết bị và bấm Đồng ý cho mã máy $hardwareId.",
+                            isError = false,
+                        )
+                    }
+                    startPendingApprovalPolling()
                 }
+            }.onFailure { err ->
+                applyActivationError(err)
             }
         }
     }
@@ -277,20 +323,78 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 )
             }
             runCatching {
-                val activated = api.activateByHardwareId(store.getServerUrl(), hardwareId)
+                val activated = api.activateByHardwareId(store.getServerUrl(), hardwareId, deviceModelLabel)
                 store.setDeviceToken(activated.token)
             }.onSuccess {
-                _ui.update { it.copy(hasToken = true) }
+                pendingPollJob?.cancel()
+                _ui.update { it.copy(hasToken = true, registrationStatus = "approved") }
                 connect()
             }.onFailure { err ->
-                _ui.update {
-                    it.copy(
-                        isConnected = false,
-                        isConnecting = false,
-                        headline = "Chưa kích hoạt được thiết bị",
-                        message = err.message ?: "Hãy thêm Mã máy $hardwareId tại mục Thiết bị trên web quản trị.",
-                        isError = true,
-                    )
+                applyActivationError(err)
+            }
+        }
+    }
+
+    private fun applyActivationError(err: Throwable) {
+        val apiErr = err as? ApiException
+        val status = when {
+            apiErr?.errorStatus != null -> apiErr.errorStatus
+            apiErr?.statusCode == 404 -> "unregistered"
+            else -> null
+        }
+        val (headline, isErr) = when (status) {
+            "pending" -> "Đang chờ quản trị viên duyệt" to false
+            "rejected" -> "Yêu cầu đăng ký đã bị từ chối" to true
+            "revoked" -> "Thiết bị đã bị thu hồi quyền" to true
+            "unregistered" -> "Thiết bị chưa được đăng ký" to false
+            else -> "Chưa kết nối được máy chủ" to true
+        }
+        val msg = when (status) {
+            "unregistered" -> "Bấm nút 'Đăng ký thiết bị tự động' bên dưới để gửi yêu cầu lên trang quản trị."
+            "pending" -> "Mã máy $hardwareId đang chờ Admin bấm Đồng ý tại mục Thiết bị. App tự kiểm tra mỗi 5 giây."
+            else -> err.message ?: "Kiểm tra lại mạng hoặc địa chỉ máy chủ HTTPS."
+        }
+        _ui.update {
+            it.copy(
+                isConnected = false,
+                isConnecting = false,
+                registrationStatus = status,
+                headline = headline,
+                message = msg,
+                isError = isErr,
+            )
+        }
+        if (status == "pending") {
+            startPendingApprovalPolling()
+        } else {
+            pendingPollJob?.cancel()
+        }
+    }
+
+    private fun startPendingApprovalPolling() {
+        pendingPollJob?.cancel()
+        pendingPollJob = viewModelScope.launch {
+            while (true) {
+                delay(5_000L)
+                if (_ui.value.isConnected || _ui.value.registrationStatus != "pending") {
+                    break
+                }
+                val url = store.getServerUrl()
+                val attempt = runCatching {
+                    api.activateByHardwareId(url, hardwareId, deviceModelLabel)
+                }
+                if (attempt.isSuccess) {
+                    val activated = attempt.getOrThrow()
+                    store.setDeviceToken(activated.token)
+                    _ui.update { it.copy(hasToken = true, registrationStatus = "approved") }
+                    connect()
+                    break
+                } else {
+                    val apiErr = attempt.exceptionOrNull() as? ApiException
+                    if (apiErr?.errorStatus == "rejected" || apiErr?.errorStatus == "revoked") {
+                        applyActivationError(apiErr)
+                        break
+                    }
                 }
             }
         }
@@ -879,6 +983,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
     override fun onCleared() {
         super.onCleared()
+        autoResetJob?.cancel()
+        pendingPollJob?.cancel()
         engine?.close()
     }
 

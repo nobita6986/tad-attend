@@ -21,23 +21,202 @@ class DeviceController extends Controller
 {
     private function deviceFor(Request $request): Device { return $request->attributes->get('attendance_device'); }
 
+    public function register(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'hardware_id' => ['required', 'string', 'min:8', 'max:80'],
+            'name' => ['nullable', 'string', 'max:120'],
+            'device_model' => ['nullable', 'string', 'max:120'],
+        ]);
+        $hwId = strtoupper(trim($data['hardware_id']));
+        $requestedName = isset($data['name']) ? trim((string) $data['name']) : '';
+        $deviceModel = isset($data['device_model']) && trim((string) $data['device_model']) !== ''
+            ? trim((string) $data['device_model'])
+            : null;
+
+        $outcome = DB::transaction(function () use ($hwId, $requestedName, $deviceModel) {
+            $device = Device::where('hardware_id', $hwId)->lockForUpdate()->first();
+
+            if ($device) {
+                if ($device->approval_status === 'approved' && $device->active) {
+                    $token = bin2hex(random_bytes(32));
+                    $updates = [
+                        'token_hash' => hash('sha256', $token),
+                        'last_seen_at' => now('UTC'),
+                    ];
+                    if ($deviceModel !== null) {
+                        $updates['device_model'] = $deviceModel;
+                    }
+                    $device->update($updates);
+
+                    AuditLog::create([
+                        'action' => 'device.activated_by_hardware_id',
+                        'subject_type' => 'device',
+                        'subject_id' => $device->id,
+                        'details' => ['name' => $device->name, 'hardware_id' => $hwId],
+                    ]);
+
+                    return [
+                        'http' => 200,
+                        'body' => [
+                            'status' => 'approved',
+                            'message' => 'Thiết bị đã được duyệt và kích hoạt tự động.',
+                            'token' => $token,
+                            'device_id' => $device->id,
+                            'name' => $device->name,
+                            'direction' => $device->direction,
+                            'hardware_id' => $device->hardware_id,
+                        ],
+                    ];
+                }
+
+                if ($device->approval_status === 'approved' && !$device->active) {
+                    return [
+                        'http' => 403,
+                        'body' => [
+                            'status' => 'revoked',
+                            'message' => 'Thiết bị này đã bị quản trị viên thu hồi quyền chấm công.',
+                        ],
+                    ];
+                }
+
+                // Pending or previously rejected -> (re)submit for admin approval.
+                $updates = [
+                    'approval_status' => 'pending',
+                    'active' => false,
+                    'requested_at' => now('UTC'),
+                ];
+                if ($requestedName !== '') {
+                    $updates['name'] = $requestedName;
+                }
+                if ($deviceModel !== null) {
+                    $updates['device_model'] = $deviceModel;
+                }
+                $device->update($updates);
+
+                AuditLog::create([
+                    'action' => 'device.registration_requested',
+                    'subject_type' => 'device',
+                    'subject_id' => $device->id,
+                    'details' => [
+                        'name' => $device->name,
+                        'hardware_id' => $hwId,
+                        'device_model' => $device->device_model,
+                    ],
+                ]);
+
+                return [
+                    'http' => 202,
+                    'body' => [
+                        'status' => 'pending',
+                        'device_id' => $device->id,
+                        'name' => $device->name,
+                        'hardware_id' => $device->hardware_id,
+                        'message' => 'Đã gửi yêu cầu đăng ký. Vui lòng mở trang Quản trị → Thiết bị và bấm Đồng ý.',
+                    ],
+                ];
+            }
+
+            $fallbackName = $requestedName !== ''
+                ? $requestedName
+                : ($deviceModel ? mb_substr($deviceModel, 0, 100) : ('Thiết bị ' . substr($hwId, -4)));
+
+            $device = Device::create([
+                'name' => $fallbackName,
+                'hardware_id' => $hwId,
+                'device_model' => $deviceModel,
+                'direction' => 'both',
+                'token_hash' => hash('sha256', bin2hex(random_bytes(32))),
+                'active' => false,
+                'approval_status' => 'pending',
+                'requested_at' => now('UTC'),
+            ]);
+
+            AuditLog::create([
+                'action' => 'device.registration_requested',
+                'subject_type' => 'device',
+                'subject_id' => $device->id,
+                'details' => [
+                    'name' => $device->name,
+                    'hardware_id' => $hwId,
+                    'device_model' => $deviceModel,
+                ],
+            ]);
+
+            return [
+                'http' => 202,
+                'body' => [
+                    'status' => 'pending',
+                    'device_id' => $device->id,
+                    'name' => $device->name,
+                    'hardware_id' => $device->hardware_id,
+                    'message' => 'Đã gửi yêu cầu đăng ký. Vui lòng mở trang Quản trị → Thiết bị và bấm Đồng ý.',
+                ],
+            ];
+        });
+
+        return response()->json($outcome['body'], $outcome['http']);
+    }
+
     public function activate(Request $request): JsonResponse
     {
         $data = $request->validate([
             'hardware_id' => ['required', 'string', 'min:8', 'max:80'],
+            'device_model' => ['nullable', 'string', 'max:120'],
         ]);
         $hwId = strtoupper(trim($data['hardware_id']));
+        $deviceModel = isset($data['device_model']) && trim((string) $data['device_model']) !== ''
+            ? trim((string) $data['device_model'])
+            : null;
 
-        $result = DB::transaction(function () use ($hwId) {
+        $outcome = DB::transaction(function () use ($hwId, $deviceModel) {
             $device = Device::where('hardware_id', $hwId)->lockForUpdate()->first();
-            abort_if(!$device, 404, "Mã máy {$hwId} chưa được đăng ký trên hệ thống. Hãy thêm Mã máy này trong mục Thiết bị trên web quản trị.");
-            abort_unless($device->active, 403, 'Thiết bị này đã bị thu hồi quyền chấm công.');
+            if (!$device) {
+                return [
+                    'http' => 404,
+                    'body' => [
+                        'status' => 'unregistered',
+                        'message' => "Mã máy {$hwId} chưa được đăng ký trên hệ thống. Bấm 'Đăng ký thiết bị' để gửi yêu cầu duyệt.",
+                    ],
+                ];
+            }
+            if ($device->approval_status === 'pending') {
+                return [
+                    'http' => 403,
+                    'body' => [
+                        'status' => 'pending',
+                        'message' => 'Thiết bị đang chờ quản trị viên duyệt trên web quản trị.',
+                    ],
+                ];
+            }
+            if ($device->approval_status === 'rejected') {
+                return [
+                    'http' => 403,
+                    'body' => [
+                        'status' => 'rejected',
+                        'message' => 'Yêu cầu đăng ký của thiết bị này đã bị từ chối. Bạn có thể bấm Đăng ký lại hoặc liên hệ quản trị viên.',
+                    ],
+                ];
+            }
+            if (!$device->active) {
+                return [
+                    'http' => 403,
+                    'body' => [
+                        'status' => 'revoked',
+                        'message' => 'Thiết bị này đã bị thu hồi quyền chấm công.',
+                    ],
+                ];
+            }
 
             $token = bin2hex(random_bytes(32));
-            $device->update([
+            $updates = [
                 'token_hash' => hash('sha256', $token),
                 'last_seen_at' => now('UTC'),
-            ]);
+            ];
+            if ($deviceModel !== null) {
+                $updates['device_model'] = $deviceModel;
+            }
+            $device->update($updates);
 
             AuditLog::create([
                 'action' => 'device.activated_by_hardware_id',
@@ -47,15 +226,19 @@ class DeviceController extends Controller
             ]);
 
             return [
-                'token' => $token,
-                'device_id' => $device->id,
-                'name' => $device->name,
-                'direction' => $device->direction,
-                'hardware_id' => $device->hardware_id,
+                'http' => 200,
+                'body' => [
+                    'status' => 'approved',
+                    'token' => $token,
+                    'device_id' => $device->id,
+                    'name' => $device->name,
+                    'direction' => $device->direction,
+                    'hardware_id' => $device->hardware_id,
+                ],
             ];
         });
 
-        return response()->json($result);
+        return response()->json($outcome['body'], $outcome['http']);
     }
 
     public function device(Request $request): JsonResponse

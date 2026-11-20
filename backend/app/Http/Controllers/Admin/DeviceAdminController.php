@@ -11,8 +11,19 @@ class DeviceAdminController extends Controller
 {
     public function index()
     {
+        $pendingDevices = Device::where('approval_status', 'pending')
+            ->orderByDesc('requested_at')
+            ->orderByDesc('created_at')
+            ->get();
+
+        $devices = Device::where('approval_status', '!=', 'pending')
+            ->orderByDesc('active')
+            ->orderBy('name')
+            ->get();
+
         return view('admin.devices.index', [
-            'devices' => Device::orderByDesc('active')->orderBy('name')->get(),
+            'pendingDevices' => $pendingDevices,
+            'devices' => $devices,
         ]);
     }
 
@@ -35,6 +46,7 @@ class DeviceAdminController extends Controller
             'direction' => $direction,
             'token_hash' => hash('sha256', $token),
             'active' => true,
+            'approval_status' => 'approved',
         ]);
 
         AuditLog::create([
@@ -89,6 +101,64 @@ class DeviceAdminController extends Controller
         ]);
 
         return back()->with('success', 'Đã cập nhật cấu hình thiết bị.');
+    }
+
+    public function approve(Request $request, Device $device)
+    {
+        $data = $request->validate([
+            'name' => ['nullable', 'string', 'max:120'],
+            'direction' => ['nullable', 'in:both,in,out'],
+        ]);
+
+        $name = isset($data['name']) && trim((string) $data['name']) !== ''
+            ? trim((string) $data['name'])
+            : $device->name;
+        $direction = $data['direction'] ?? $device->direction ?? 'both';
+
+        $device->update([
+            'name' => $name,
+            'direction' => $direction,
+            'approval_status' => 'approved',
+            'active' => true,
+            'token_hash' => hash('sha256', bin2hex(random_bytes(32))),
+        ]);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'device.approved',
+            'subject_type' => 'device',
+            'subject_id' => $device->id,
+            'details' => [
+                'name' => $device->name,
+                'hardware_id' => $device->hardware_id,
+                'direction' => $device->direction,
+            ],
+        ]);
+
+        return redirect()->route('admin.devices.index')
+            ->with('success', "Đã duyệt thiết bị \"{$device->name}\". Ứng dụng trên điện thoại sẽ tự kích hoạt trong vài giây.");
+    }
+
+    public function reject(Request $request, Device $device)
+    {
+        $device->update([
+            'approval_status' => 'rejected',
+            'active' => false,
+        ]);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'device.rejected',
+            'subject_type' => 'device',
+            'subject_id' => $device->id,
+            'details' => [
+                'name' => $device->name,
+                'hardware_id' => $device->hardware_id,
+            ],
+        ]);
+
+        return redirect()->route('admin.devices.index')
+            ->with('success', "Đã từ chối yêu cầu đăng ký của thiết bị \"{$device->name}\".");
     }
 
     public function revoke(Request $request, Device $device)

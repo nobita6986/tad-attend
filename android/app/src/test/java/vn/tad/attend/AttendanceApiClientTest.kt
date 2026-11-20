@@ -149,4 +149,45 @@ class AttendanceApiClientTest {
         assertEquals("/api/v1/devices/activate", req.path)
         assertTrue(req.body.readUtf8().contains("AND-A1B2-C3D4-E5F6-7890"))
     }
+
+    @Test
+    fun registersDeviceAndParsesPendingRejectedStatus() = runTest {
+        val client = AttendanceApiClient(allowCleartextForTest = true)
+        val baseUrl = server.url("/").toString().trimEnd('/')
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(202)
+                .setBody(
+                    """{"status":"pending","device_id":"d-3","name":"Cổng chính","hardware_id":"AND-1111-2222-3333-4444","message":"Đang chờ duyệt"}""",
+                ),
+        )
+        val reg = client.registerByHardwareId(
+            baseUrl = baseUrl,
+            hardwareId = "and-1111-2222-3333-4444",
+            name = "Cổng chính",
+            deviceModel = "Xiaomi 23049PCD8G (Android 14)",
+        )
+        assertEquals("pending", reg.status)
+        assertEquals("d-3", reg.deviceId)
+        val regReq = server.takeRequest()
+        assertEquals("/api/v1/devices/register", regReq.path)
+        val regBody = regReq.body.readUtf8()
+        assertTrue(regBody.contains("AND-1111-2222-3333-4444"))
+        assertTrue(regBody.contains("Xiaomi 23049PCD8G"))
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(403)
+                .setBody("""{"status":"rejected","message":"Bị từ chối"}"""),
+        )
+        var caught: vn.tad.attend.data.ApiException? = null
+        try {
+            client.activateByHardwareId(baseUrl, "AND-1111-2222-3333-4444")
+        } catch (e: vn.tad.attend.data.ApiException) {
+            caught = e
+        }
+        assertEquals(403, caught?.statusCode)
+        assertEquals("rejected", caught?.errorStatus)
+    }
 }

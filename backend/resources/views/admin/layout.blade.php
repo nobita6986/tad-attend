@@ -41,10 +41,11 @@
     ];
 
     if ($isSystemAdmin) {
+      $pendingDevicesCount = \App\Models\Device::where('approval_status', 'pending')->count();
       $navGroups[] = [
         'label' => 'Hệ thống',
         'items' => [
-          ['route' => 'admin.devices.index', 'match' => 'admin.devices.*', 'label' => 'Thiết bị',  'icon' => 'device'],
+          ['route' => 'admin.devices.index', 'match' => 'admin.devices.*', 'label' => 'Thiết bị',  'icon' => 'device', 'badge' => $pendingDevicesCount],
           ['route' => 'admin.users.index',   'match' => 'admin.users.*',   'label' => 'Tài khoản', 'icon' => 'shield'],
         ],
       ];
@@ -93,7 +94,10 @@
                 <li>
                   <a href="{{ route($item['route']) }}" @if($isCurrent) aria-current="page" @endif>
                     <x-icon :name="$item['icon']" :size="17" />
-                    <span>{{ $item['label'] }}</span>
+                    <span style="flex:1">{{ $item['label'] }}</span>
+                    @if(!empty($item['badge']))
+                      <span style="background:#EA580C;color:#fff;font-size:0.72rem;font-weight:700;padding:1px 7px;border-radius:999px;line-height:1.4">{{ $item['badge'] }}</span>
+                    @endif
                   </a>
                 </li>
               @endforeach

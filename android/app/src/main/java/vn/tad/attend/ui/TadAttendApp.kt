@@ -167,6 +167,9 @@ fun TadAttendApp(viewModel: AttendanceViewModel) {
                         onRequestCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         onFrame = viewModel::onCameraFrame,
                         onReconnect = viewModel::connect,
+                        onRequestRegistration = { customName ->
+                            viewModel.requestAutoRegistration(customName)
+                        },
                         onSyncRoster = viewModel::refreshRoster,
                     )
 
@@ -192,6 +195,10 @@ fun TadAttendApp(viewModel: AttendanceViewModel) {
                                 viewModel.saveSettingsAndConnect(url, token)
                                 selectedTab = 0
                             },
+                            onRequestRegistration = { url, customName ->
+                                viewModel.requestAutoRegistration(customName, url)
+                                selectedTab = 0
+                            },
                             onActivateByHardwareId = { url ->
                                 viewModel.activateByHardwareIdNow(url)
                                 selectedTab = 0
@@ -215,6 +222,7 @@ private fun KioskScreen(
     onRequestCamera: () -> Unit,
     onFrame: (vn.tad.attend.camera.AnalyzedFrame) -> Unit,
     onReconnect: () -> Unit,
+    onRequestRegistration: (String) -> Unit,
     onSyncRoster: () -> Unit,
 ) {
     Column(
@@ -377,10 +385,16 @@ private fun KioskScreen(
                 if (!ui.isConnected && !ui.isConnecting) {
                     val clipboard = LocalClipboardManager.current
                     var copiedHw by remember { mutableStateOf(false) }
+                    var customDeviceName by remember { mutableStateOf("") }
+                    val isPending = ui.registrationStatus == "pending"
+                    val isRejected = ui.registrationStatus == "rejected"
+                    val isRevoked = ui.registrationStatus == "revoked"
+
                     Spacer(Modifier.height(10.dp))
                     Surface(
-                        color = Color(0xFFEFF6FF),
+                        color = if (isPending) Color(0xFFFFFBEB) else Color(0xFFEFF6FF),
                         shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, if (isPending) Color(0xFFF59E0B) else Color(0xFFBFDBFE)),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Row(
@@ -412,9 +426,54 @@ private fun KioskScreen(
                             }
                         }
                     }
-                    Spacer(Modifier.height(10.dp))
-                    Button(onClick = onReconnect) {
-                        Text("Kết nối máy chủ")
+
+                    if (isPending) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                text = "Tự động kiểm tra duyệt mỗi 5 giây...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF92400E),
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(onClick = onReconnect) {
+                            Text("Kiểm tra ngay")
+                        }
+                    } else if (!isRevoked) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = customDeviceName,
+                            onValueChange = { customDeviceName = it },
+                            label = { Text("Tên thiết bị (tùy chọn, vd: Cổng chính)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(
+                                onClick = { onRequestRegistration(customDeviceName) },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(if (isRejected) "Gửi đăng ký lại" else "Đăng ký thiết bị")
+                            }
+                            OutlinedButton(onClick = onReconnect) {
+                                Text("Kết nối lại")
+                            }
+                        }
+                    } else {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(onClick = onReconnect) {
+                            Text("Thử kết nối lại")
+                        }
                     }
                 }
             }
@@ -743,12 +802,14 @@ private fun EnrollmentScreen(
 private fun SettingsScreen(
     ui: AttendUiState,
     onSave: (String, String) -> Unit,
+    onRequestRegistration: (String, String) -> Unit,
     onActivateByHardwareId: (String) -> Unit,
     onRefreshRoster: () -> Unit,
     onLock: () -> Unit,
 ) {
     var serverUrl by rememberSaveable(ui.serverUrl) { mutableStateOf(ui.serverUrl) }
     var newToken by rememberSaveable { mutableStateOf("") }
+    var customDeviceName by rememberSaveable { mutableStateOf("") }
     val clipboard = LocalClipboardManager.current
     var copiedHw by remember { mutableStateOf(false) }
 
@@ -784,7 +845,7 @@ private fun SettingsScreen(
             ) {
                 Text("Mã máy cố định (Hardware ID)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF142946))
                 Text(
-                    text = "Đăng ký Mã máy này 1 lần trên /admin/devices. Mỗi lần nâng cấp hoặc cài lại app, máy sẽ tự động kết nối mà không cần tạo lại token.",
+                    text = "Bấm 'Đăng ký thiết bị tự động' để gửi Mã máy này lên trang Quản trị → Thiết bị. Sau khi Admin bấm Đồng ý, máy sẽ tự kết nối mãi mãi kể cả khi nâng cấp hay cài lại app.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF475569),
                 )
@@ -811,8 +872,26 @@ private fun SettingsScreen(
                         Text(if (copiedHw) "Đã chép" else "Sao chép")
                     }
                 }
-                Button(onClick = { onActivateByHardwareId(serverUrl) }) {
-                    Text("Kích hoạt tự động theo Mã máy")
+                OutlinedTextField(
+                    value = customDeviceName,
+                    onValueChange = { customDeviceName = it },
+                    label = { Text("Tên thiết bị khi gửi đăng ký (tùy chọn)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = { onRequestRegistration(serverUrl, customDeviceName) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Đăng ký tự động")
+                    }
+                    OutlinedButton(onClick = { onActivateByHardwareId(serverUrl) }) {
+                        Text("Kích hoạt ngay")
+                    }
                 }
             }
         }
