@@ -13,7 +13,9 @@
     <p class="page-subtitle">Cập nhật theo thời gian thực · Hôm nay {{ now($tz)->format('d/m/Y') }} (UTC+7)</p>
   </div>
   <div class="page-actions">
-    <a class="btn btn-outline" href="{{ route('admin.devices.index') }}"><x-icon name="device" :size="16" /> Thiết bị</a>
+    @if(auth()->user()->isSystemAdmin())
+      <a class="btn btn-outline" href="{{ route('admin.devices.index') }}"><x-icon name="device" :size="16" /> Thiết bị</a>
+    @endif
     <a class="btn btn-outline" href="{{ route('admin.employees.index') }}"><x-icon name="plus" :size="16" /> Nhân viên</a>
     <a class="btn" href="{{ route('admin.reports.index') }}"><x-icon name="chart" :size="16" /> Xem báo cáo</a>
   </div>

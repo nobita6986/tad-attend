@@ -6,6 +6,7 @@ use App\Http\Controllers\Admin\ShiftController;
 use App\Http\Controllers\Admin\AttendanceController;
 use App\Http\Controllers\Admin\ReportController;
 use App\Http\Controllers\Admin\DeviceAdminController;
+use App\Http\Controllers\Admin\UserAdminController;
 use Illuminate\Support\Facades\Route;
 
 Route::redirect('/', '/admin');
@@ -30,8 +31,15 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin.only'])->grou
     Route::get('/reports/daily', [ReportController::class, 'index'])->name('reports.index');
     Route::get('/reports/export-detail', [ReportController::class, 'exportDetail'])->name('reports.detail');
     Route::get('/reports/export-summary', [ReportController::class, 'exportSummary'])->name('reports.summary');
-    Route::get('/devices', [DeviceAdminController::class, 'index'])->name('devices.index');
-    Route::post('/devices', [DeviceAdminController::class, 'store'])->name('devices.store');
-    Route::put('/devices/{device}', [DeviceAdminController::class, 'update'])->name('devices.update');
-    Route::post('/devices/{device}/revoke', [DeviceAdminController::class, 'revoke'])->name('devices.revoke');
+
+    Route::middleware('system.admin')->group(function () {
+        Route::get('/devices', [DeviceAdminController::class, 'index'])->name('devices.index');
+        Route::post('/devices', [DeviceAdminController::class, 'store'])->name('devices.store');
+        Route::put('/devices/{device}', [DeviceAdminController::class, 'update'])->name('devices.update');
+        Route::post('/devices/{device}/revoke', [DeviceAdminController::class, 'revoke'])->name('devices.revoke');
+
+        Route::get('/users', [UserAdminController::class, 'index'])->name('users.index');
+        Route::post('/users', [UserAdminController::class, 'store'])->name('users.store');
+        Route::put('/users/{user}', [UserAdminController::class, 'update'])->name('users.update');
+    });
 });

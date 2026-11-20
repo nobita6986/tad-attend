@@ -15,7 +15,10 @@ class CreateAdmin extends Command
         if (!filter_var($email, FILTER_VALIDATE_EMAIL) || strlen((string) $password) < 12) {
             $this->error('Email không hợp lệ hoặc mật khẩu dưới 12 ký tự.'); return self::FAILURE;
         }
-        User::updateOrCreate(['email' => $email], ['name' => $name ?: 'Administrator', 'password' => Hash::make($password), 'is_admin' => true]);
+        User::updateOrCreate(
+            ['email' => $email],
+            ['name' => $name ?: 'Administrator', 'password' => Hash::make($password), 'is_admin' => true, 'role' => 'admin', 'active' => true]
+        );
         $this->info('Đã tạo/cập nhật admin.'); return self::SUCCESS;
     }
 }
