@@ -19,12 +19,21 @@ class AttendanceController extends Controller
         $date = $data['date'] ?? CarbonImmutable::now(config('attendance.timezone'))->format('Y-m-d');
         $start = CarbonImmutable::parse($date, config('attendance.timezone'))->startOfDay()->utc();
         $end = CarbonImmutable::parse($date, config('attendance.timezone'))->addDay()->startOfDay()->utc();
+        $perPage = (int) $request->query('per_page', 30);
+        if (!in_array($perPage, [20, 30, 50, 100], true)) {
+            $perPage = 30;
+        }
         $events = AttendanceEvent::with(['employee','device'])
             ->where('captured_at', '>=', $start)->where('captured_at', '<', $end)
             ->when($data['employee_id'] ?? null, fn ($q, $id) => $q->where('employee_id', $id))
             ->when($data['state'] ?? null, fn ($q, $state) => $q->where('review_state', $state))
-            ->orderByDesc('captured_at')->paginate(40)->withQueryString();
-        return view('admin.attendance.index', ['events' => $events, 'date' => $date, 'employees' => Employee::orderBy('code')->get()]);
+            ->orderByDesc('captured_at')->paginate($perPage)->withQueryString();
+        return view('admin.attendance.index', [
+            'events' => $events,
+            'date' => $date,
+            'perPage' => $perPage,
+            'employees' => Employee::orderBy('code')->get(),
+        ]);
     }
     public function image(AttendanceEvent $event)
     {

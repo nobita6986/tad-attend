@@ -38,6 +38,14 @@
         @endforeach
       </select>
     </div>
+    <div class="field">
+      <label for="filter-per-page">Số dòng / trang</label>
+      <select id="filter-per-page" name="per_page">
+        @foreach([20, 30, 50, 100] as $opt)
+          <option value="{{ $opt }}" @selected(($perPage ?? 30) === $opt)>{{ $opt }} dòng</option>
+        @endforeach
+      </select>
+    </div>
     <div>
       <button type="submit" style="width:100%"><x-icon name="filter" :size="15" /> Lọc kết quả</button>
     </div>

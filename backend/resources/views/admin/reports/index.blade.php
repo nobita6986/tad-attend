@@ -47,15 +47,23 @@
         @endforeach
       </select>
     </div>
+    <div class="field">
+      <label for="rep-per-page">Số dòng / trang</label>
+      <select id="rep-per-page" name="per_page">
+        @foreach([20, 30, 50, 100] as $opt)
+          <option value="{{ $opt }}" @selected(($perPage ?? 30) === $opt)>{{ $opt }} dòng</option>
+        @endforeach
+      </select>
+    </div>
     <div>
       <button type="submit" style="width:100%"><x-icon name="filter" :size="15" /> Xem bảng công</button>
     </div>
   </form>
 </section>
 
-<section class="card">
+<section class="card" id="summary-table">
   <div class="card-head">
-    <h2><x-icon name="users" :size="18" /> Tổng hợp theo nhân viên</h2>
+    <h2><x-icon name="users" :size="18" /> Tổng hợp theo nhân viên ({{ $summary->total() }})</h2>
   </div>
   <div tabindex="0" role="region" aria-label="Bảng tổng hợp công theo nhân viên" class="table-wrapper">
     <table>
@@ -98,13 +106,22 @@
       </tbody>
     </table>
   </div>
+  @if($summary->hasPages())
+    <div class="pagination-wrap">{{ $summary->links() }}</div>
+  @endif
 </section>
 
-<section class="card">
+<section class="card" id="daily-table">
   <div class="card-head">
     <div>
-      <h2><x-icon name="chart" :size="18" /> Bảng công theo ngày</h2>
-      <p class="card-subtitle">Hiển thị tối đa 100 / {{ $total }} dòng · Tải file Excel để xem đầy đủ toàn kỳ</p>
+      <h2><x-icon name="chart" :size="18" /> Bảng công theo ngày ({{ $rows->total() }} dòng)</h2>
+      <p class="card-subtitle">
+        @if($rows->total() > 0)
+          Đang xem dòng {{ $rows->firstItem() }}–{{ $rows->lastItem() }} trên tổng {{ $rows->total() }} dòng · Tải file Excel để xuất toàn bộ kỳ công
+        @else
+          Chưa có dữ liệu trong khoảng thời gian đã chọn
+        @endif
+      </p>
     </div>
   </div>
   <div tabindex="0" role="region" aria-label="Bảng công chi tiết theo ngày" class="table-wrapper">
@@ -142,5 +159,8 @@
       </tbody>
     </table>
   </div>
+  @if($rows->hasPages())
+    <div class="pagination-wrap">{{ $rows->links() }}</div>
+  @endif
 </section>
 @endsection

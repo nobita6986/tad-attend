@@ -19,7 +19,8 @@ class DeviceAdminController extends Controller
         $devices = Device::where('approval_status', '!=', 'pending')
             ->orderByDesc('active')
             ->orderBy('name')
-            ->get();
+            ->paginate(20)
+            ->withQueryString();
 
         return view('admin.devices.index', [
             'pendingDevices' => $pendingDevices,

@@ -16,7 +16,8 @@ class UserAdminController extends Controller
             'users' => User::orderByDesc('active')
                 ->orderByRaw("CASE WHEN role = 'admin' OR is_admin = 1 THEN 0 WHEN role = 'hr' THEN 1 ELSE 2 END")
                 ->orderBy('name')
-                ->get(),
+                ->paginate(20)
+                ->withQueryString(),
         ]);
     }
 
