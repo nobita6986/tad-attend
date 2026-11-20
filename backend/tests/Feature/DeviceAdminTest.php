@@ -106,9 +106,10 @@ class DeviceAdminTest extends TestCase
 
         $admin = $this->makeAdmin();
 
-        // Unregistered hardware ID returns 404.
+        // Unregistered hardware ID returns 404 from the controller (not route-not-found).
         $this->postJson('/api/v1/devices/activate', ['hardware_id' => 'AND-1111-2222-3333-4444'])
-            ->assertNotFound();
+            ->assertNotFound()
+            ->assertSee('AND-1111-2222-3333-4444');
 
         // Admin registers device bound to fixed hardware_id (lowercase input normalized to uppercase).
         $this->actingAs($admin)->post('/admin/devices', [

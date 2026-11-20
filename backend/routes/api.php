@@ -2,7 +2,9 @@
 use App\Http\Controllers\Api\DeviceController;
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('v1')->middleware(['throttle:20,1'])->post('/devices/activate', [DeviceController::class, 'activate']);
+Route::prefix('v1')->middleware(['throttle:20,1'])->group(function () {
+    Route::post('/devices/activate', [DeviceController::class, 'activate']);
+});
 
 Route::prefix('v1')->middleware(['throttle:60,1', 'device.auth'])->group(function () {
     Route::get('/device', [DeviceController::class, 'device']);
