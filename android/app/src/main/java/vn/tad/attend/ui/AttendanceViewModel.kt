@@ -61,13 +61,13 @@ data class AttendUiState(
     val isConnected: Boolean = false,
     val isConnecting: Boolean = false,
     val isModelReady: Boolean = false,
-    val modelStatus: String = "Đang kiểm tra mô hình SFace...",
+    val modelStatus: String = "Đang khởi động nhận diện khuôn mặt...",
     val deviceInfo: DeviceInfo? = null,
     val rosterCount: Int = 0,
     val availableShifts: List<ShiftOption> = emptyList(),
     val availableEmployees: List<EmployeeOption> = emptyList(),
-    val headline: String = "Chưa kết nối máy chủ",
-    val message: String = "Vào mục Cấu hình để nhập URL và token thiết bị.",
+    val headline: String = "Đang chuẩn bị...",
+    val message: String = "Vui lòng đợi trong giây lát.",
     val livenessStage: LivenessStage = LivenessStage.WAITING_FOR_FACE,
     val lastReceipt: AttendanceReceipt? = null,
     val isError: Boolean = false,
@@ -139,20 +139,20 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             _ui.update {
                 it.copy(
                     isModelReady = true,
-                    modelStatus = "SFace ${BuildConfig.EXPECTED_MODEL_VERSION} (${sface.dimensions()} chiều) — Sẵn sàng",
+                    modelStatus = "Sẵn sàng",
                 )
             }
             // Always attempt connect: if no token is cached yet (fresh install/reinstall),
             // connect() automatically activates using the device's fixed Hardware ID.
             connect()
-        }.onFailure { err ->
+        }.onFailure {
             engine = null
             _ui.update {
                 it.copy(
                     isModelReady = false,
-                    modelStatus = err.message ?: "Không tải được mô hình SFace.",
-                    headline = "Thiếu mô hình AI",
-                    message = err.message ?: "Không tải được mô hình SFace. Không cho phép chấm công.",
+                    modelStatus = "Chưa sẵn sàng",
+                    headline = "Không thể khởi động nhận diện",
+                    message = "Vui lòng đóng ứng dụng mở lại hoặc báo quản lý kiểm tra.",
                     isError = true,
                 )
             }
@@ -166,8 +166,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 _ui.update {
                     it.copy(
                         isConnected = false,
-                        headline = "Thiếu mô hình AI",
-                        message = "Không thể kết nối khi mô hình SFace chưa sẵn sàng.",
+                        headline = "Chưa sẵn sàng nhận diện",
+                        message = "Vui lòng đóng ứng dụng mở lại hoặc báo quản lý.",
                         isError = true,
                     )
                 }
@@ -178,7 +178,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 it.copy(
                     isConnecting = true,
                     headline = "Đang kết nối...",
-                    message = "Xác thực thiết bị ($hardwareId) và đồng bộ từ $url",
+                    message = "Đang kiểm tra kết nối máy chấm công...",
                     isError = false,
                 )
             }
@@ -208,18 +208,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     }
                 }
                 if (info.modelId == "UNCONFIGURED" || info.modelVersion == "UNCONFIGURED") {
-                    throw IllegalStateException("Máy chủ chưa cấu hình mô hình nhận diện.")
+                    throw IllegalStateException("Hệ thống chưa hoàn tất cài đặt. Vui lòng báo quản lý.")
                 }
                 if (info.modelId != BuildConfig.EXPECTED_MODEL_ID ||
-                    info.modelVersion != BuildConfig.EXPECTED_MODEL_VERSION
+                    info.modelVersion != BuildConfig.EXPECTED_MODEL_VERSION ||
+                    info.embeddingDimensions != sface.dimensions()
                 ) {
                     throw IllegalStateException(
-                        "Mô hình máy chủ (${info.modelId}/${info.modelVersion}) không khớp app (${BuildConfig.EXPECTED_MODEL_ID}/${BuildConfig.EXPECTED_MODEL_VERSION}).",
-                    )
-                }
-                if (info.embeddingDimensions != sface.dimensions()) {
-                    throw IllegalStateException(
-                        "Số chiều máy chủ (${info.embeddingDimensions}) không khớp SFace (${sface.dimensions()}).",
+                        "Ứng dụng cần được cập nhật phiên bản mới. Vui lòng báo quản lý.",
                     )
                 }
                 val people = api.getRoster(url, token, info.modelId, info.modelVersion)
@@ -246,9 +242,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         availableEmployees = sortEmployeesForEnrollment(options.employees),
                         headline = "Chấm công · ${info.name}",
                         message = if (people.isEmpty()) {
-                            "Đã kết nối (${directionLabel(info.direction)}). Vào tab Đăng ký để thêm nhân viên ngay trên máy."
+                            "Máy đã sẵn sàng nhưng chưa có khuôn mặt nhân viên nào."
                         } else {
-                            "Đã đồng bộ ${people.size} nhân viên. Đưa khuôn mặt vào khung và chớp mắt / quay nhẹ đầu."
+                            "Mời bạn đưa khuôn mặt vào khung, chớp mắt hoặc quay nhẹ đầu."
                         },
                         lastReceipt = null,
                         livenessStage = LivenessStage.WAITING_FOR_FACE,
@@ -275,7 +271,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 it.copy(
                     isConnecting = true,
                     headline = "Đang gửi yêu cầu đăng ký...",
-                    message = "Gửi Mã máy $hardwareId lên $url",
+                    message = "Vui lòng đợi trong giây lát...",
                     isError = false,
                 )
             }
@@ -297,8 +293,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             isConnected = false,
                             isConnecting = false,
                             registrationStatus = "pending",
-                            headline = "Đang chờ quản trị viên duyệt",
-                            message = resp.message ?: "Vào web quản trị → mục Thiết bị và bấm Đồng ý cho mã máy $hardwareId.",
+                            headline = "Đang chờ quản lý duyệt",
+                            message = "Đã gửi yêu cầu đăng ký máy. Vui lòng báo quản lý bấm Đồng ý, máy sẽ tự kết nối ngay.",
                             isError = false,
                         )
                     }
@@ -317,8 +313,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             _ui.update {
                 it.copy(
                     isConnecting = true,
-                    headline = "Đang kích hoạt theo Mã máy...",
-                    message = "Gửi Mã máy $hardwareId lên ${store.getServerUrl()}",
+                    headline = "Đang kết nối máy chấm công...",
+                    message = "Vui lòng đợi trong giây lát...",
                     isError = false,
                 )
             }
@@ -343,16 +339,18 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             else -> null
         }
         val (headline, isErr) = when (status) {
-            "pending" -> "Đang chờ quản trị viên duyệt" to false
-            "rejected" -> "Yêu cầu đăng ký đã bị từ chối" to true
-            "revoked" -> "Thiết bị đã bị thu hồi quyền" to true
-            "unregistered" -> "Thiết bị chưa được đăng ký" to false
-            else -> "Chưa kết nối được máy chủ" to true
+            "pending" -> "Đang chờ quản lý duyệt" to false
+            "rejected" -> "Yêu cầu đăng ký bị từ chối" to true
+            "revoked" -> "Máy đã bị khóa quyền chấm công" to true
+            "unregistered" -> "Máy chưa được đăng ký" to false
+            else -> "Chưa kết nối được" to true
         }
         val msg = when (status) {
-            "unregistered" -> "Bấm nút 'Đăng ký thiết bị tự động' bên dưới để gửi yêu cầu lên trang quản trị."
-            "pending" -> "Mã máy $hardwareId đang chờ Admin bấm Đồng ý tại mục Thiết bị. App tự kiểm tra mỗi 5 giây."
-            else -> err.message ?: "Kiểm tra lại mạng hoặc địa chỉ máy chủ HTTPS."
+            "unregistered" -> "Bấm nút 'Đăng ký thiết bị' bên dưới rồi báo quản lý bấm Đồng ý."
+            "pending" -> "Vui lòng báo quản lý bấm Đồng ý. Máy sẽ tự mở chấm công ngay sau khi duyệt."
+            "rejected" -> "Quản lý đã từ chối máy này. Bạn có thể bấm 'Gửi đăng ký lại' hoặc báo quản lý."
+            "revoked" -> "Vui lòng liên hệ quản lý để mở lại máy chấm công này."
+            else -> friendlyError(err, "Vui lòng kiểm tra lại kết nối mạng và thử lại.")
         }
         _ui.update {
             it.copy(
@@ -447,7 +445,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             }.onFailure { err ->
                 _ui.update {
                     it.copy(
-                        message = err.message ?: "Không đồng bộ được danh sách nhân viên.",
+                        message = friendlyError(err, "Không thể cập nhật danh sách nhân viên. Kiểm tra lại mạng."),
                         isError = true,
                     )
                 }
@@ -743,7 +741,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             mode = AppMode.KIOSK,
                             enrollmentActive = false,
                             enrollmentSamples = 0,
-                            enrollmentStatus = err.message ?: "Lỗi lưu thông tin nhân viên lên máy chủ.",
+                            enrollmentStatus = friendlyError(err, "Chưa lưu được thông tin nhân viên. Vui lòng thử lại."),
                             enrollmentError = true,
                         )
                     }
@@ -834,13 +832,13 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
 
-            extracted.onFailure { err ->
+            extracted.onFailure {
                 val canRetry = liveness.markCaptureAttemptFailed(SystemClock.elapsedRealtime())
                 if (canRetry) {
                     _ui.update {
                         it.copy(
                             livenessStage = LivenessStage.LOOK_STRAIGHT,
-                            message = "Ảnh hơi mờ, giữ nguyên mặt nhìn thẳng (${liveness.currentAttempt()}/${liveness.maxAttempts()})...",
+                            message = "Ảnh hơi mờ, vui lòng giữ yên mặt nhìn thẳng...",
                             isError = false,
                         )
                     }
@@ -848,8 +846,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     holdFeedbackUntilMs = SystemClock.elapsedRealtime() + 2_500L
                     _ui.update {
                         it.copy(
-                            headline = "Chưa chụp được khuôn mặt",
-                            message = err.message ?: "Vui lòng nhìn thẳng đủ sáng và thử lại.",
+                            headline = "Chưa chụp rõ khuôn mặt",
+                            message = "Vui lòng đứng đủ sáng, nhìn thẳng vào camera và thử lại.",
                             isError = true,
                         )
                     }
@@ -871,22 +869,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         _ui.update {
                             it.copy(
                                 livenessStage = LivenessStage.LOOK_STRAIGHT,
-                                message = "Đang lấy khung hình nét hơn (${liveness.currentAttempt()}/${liveness.maxAttempts()})...",
+                                message = "Giữ yên khuôn mặt nhìn thẳng vào camera...",
                                 isError = false,
                             )
                         }
                     } else {
                         holdFeedbackUntilMs = SystemClock.elapsedRealtime() + 2_500L
-                        val scoreNote = match.bestScore?.let {
-                            String.format(Locale.US, " (score %.2f / ngưỡng %.2f)", it, info.minScore)
-                        }.orEmpty()
                         _ui.update {
                             it.copy(
-                                headline = "Chưa thể nhận diện",
+                                headline = "Chưa nhận diện được",
                                 message = if (roster.isEmpty()) {
-                                    "Chưa có nhân viên nào đăng ký khuôn mặt trên hệ thống."
+                                    "Chưa có khuôn mặt nhân viên nào trong hệ thống."
                                 } else {
-                                    "Không đủ chắc chắn để ghi công$scoreNote. Thử đứng đủ sáng hoặc đăng ký lại khuôn mặt."
+                                    "Vui lòng đứng đủ sáng, nhìn thẳng vào camera và thử lại."
                                 },
                                 lastReceipt = null,
                                 isError = true,
@@ -899,6 +894,11 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 is MatchOutcome.Matched -> {
                     val person = match.candidate.person
                     val score = match.candidate.score
+                    val salutation = when (person.gender) {
+                        "female" -> "chị"
+                        "male" -> "anh"
+                        else -> "anh/chị"
+                    }
                     runCatching {
                         api.submitAttendance(
                             baseUrl = store.getServerUrl(),
@@ -915,24 +915,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         liveness.markPunchCompleted(nowMs)
                         holdFeedbackUntilMs = 0L
                         scheduleAutoResetAfterPunch()
-                        val salutation = when (person.gender) {
-                            "female" -> "chị"
-                            "male" -> "anh"
-                            else -> "anh/chị"
-                        }
                         val formatted = formatVnTime(receipt.recordedAt)
                         val headlineText = if (receipt.reviewState == "accepted") {
                             if (receipt.direction == "both") "Chấm công thành công"
                             else "Chấm công thành công (${directionLabel(receipt.direction)})"
                         } else {
-                            "Đã ghi nhận — chờ duyệt"
+                            "Đã ghi nhận — chờ xác nhận"
                         }
                         _ui.update {
                             it.copy(
                                 livenessStage = LivenessStage.COOLDOWN_WAIT_LEAVE,
                                 lastReceipt = receipt,
                                 headline = headlineText,
-                                message = "Xin chào $salutation ${receipt.employeeName}! Ghi nhận lúc $formatted.",
+                                message = "Xin chào $salutation ${receipt.employeeName}! Đã chấm công lúc $formatted.",
                                 isError = false,
                             )
                         }
@@ -949,8 +944,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         _ui.update {
                             it.copy(
                                 lastReceipt = null,
-                                headline = if (isCooldown) "Đã chấm công trước đó" else "Không ghi được công",
-                                message = err.message ?: "Lỗi gửi lượt chấm công.",
+                                headline = if (isCooldown) "Bạn vừa chấm công rồi" else "Chưa gửi được chấm công",
+                                message = if (isCooldown) {
+                                    "Hệ thống đã ghi nhận lượt chấm công trước đó của $salutation ${person.fullName}."
+                                } else {
+                                    friendlyError(err, "Mạng đang không ổn định, vui lòng thử lại sau vài giây.")
+                                },
                                 isError = !isCooldown,
                             )
                         }
@@ -979,6 +978,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
         }
+    }
+
+    private fun friendlyError(err: Throwable, fallback: String): String {
+        val raw = err.message?.trim().orEmpty()
+        if (raw.isEmpty()) return fallback
+        val cleaned = raw.replace(Regex("^HTTP\\s+\\d+\\s*:\\s*", RegexOption.IGNORE_CASE), "").trim()
+        val looksTechnical = cleaned.contains("Exception", ignoreCase = true) ||
+            cleaned.contains("Unable to resolve host", ignoreCase = true) ||
+            cleaned.contains("Failed to connect", ignoreCase = true) ||
+            cleaned.contains("timeout", ignoreCase = true) ||
+            cleaned.contains("SSL", ignoreCase = true) ||
+            cleaned.contains("CLEARTEXT", ignoreCase = true)
+        return if (cleaned.isEmpty() || looksTechnical) fallback else cleaned
     }
 
     override fun onCleared() {

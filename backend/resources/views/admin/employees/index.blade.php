@@ -4,26 +4,9 @@
 <div class="page-header">
   <div>
     <h1>Quản lý nhân viên</h1>
-    <p class="page-subtitle">Quản lý hồ sơ, phân ca, sự đồng ý sinh trắc và trạng thái khuôn mặt. Có thể thêm nhân viên trực tiếp trên app Android.</p>
+    <p class="page-subtitle">Quản lý hồ sơ, phân ca, sự đồng ý sinh trắc và trạng thái khuôn mặt. Có thể thêm nhân viên và chụp khuôn mặt trực tiếp trên app chấm công.</p>
   </div>
 </div>
-
-@if(session('ticket'))
-  <div class="alert alert--highlight" role="status">
-    <x-icon name="shield" :size="22" style="color:var(--color-primary);flex-shrink:0;margin-top:2px" />
-    <div style="flex:1;min-width:0">
-      <strong style="color:var(--color-primary)">MÃ ĐĂNG KÝ — CHỈ HIỂN THỊ MỘT LẦN</strong>
-      <p style="margin:4px 0 8px">Nhân viên: <strong>{{ session('ticket')['employee'] }}</strong></p>
-      <div class="secret-box">
-        <code id="issued-ticket-code" class="secret-code">{{ session('ticket')['code'] }}</code>
-        <button type="button" class="btn-outline btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('issued-ticket-code').textContent).then(()=>{this.textContent='Đã sao chép'})">
-          <x-icon name="copy" :size="14" /> Sao chép mã
-        </button>
-      </div>
-      <span class="muted small">Mã hết hạn sau 10 phút; không chia sẻ công khai.</span>
-    </div>
-  </div>
-@endif
 
 <section class="card">
   <details class="disclosure" @if($errors->any()) open @endif>
@@ -107,15 +90,7 @@
               </div>
             </td>
             <td data-label="Khuôn mặt">
-              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
-                <x-badge :variant="$hasFace ? 'info' : 'warning'">{{ $hasFace ? 'Đã đăng ký' : 'Chưa có mặt' }}</x-badge>
-                @if($e->consent_at && $e->active)
-                  <form method="post" action="{{ route('admin.employees.ticket', $e) }}" style="margin:0">
-                    @csrf
-                    <button class="btn-outline btn-sm" type="submit">Cấp mã 10 phút</button>
-                  </form>
-                @endif
-              </div>
+              <x-badge :variant="$hasFace ? 'info' : 'warning'">{{ $hasFace ? 'Đã đăng ký' : 'Chưa có mặt' }}</x-badge>
             </td>
             <td data-label="Quản lý" style="min-width:260px">
               <details class="disclosure">
