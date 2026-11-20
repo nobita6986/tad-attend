@@ -43,7 +43,8 @@ class UserAdminTest extends TestCase
         $audit = AuditLog::where('action', 'user.created')->firstOrFail();
         $this->assertStringNotContainsString('HrSecret2026!', json_encode($audit->details));
 
-        // HR can log in via web form.
+        // Log out admin first before testing HR login form (route has guest middleware).
+        $this->post('/admin/logout');
         $this->post('/admin/login', [
             'email' => 'hr@example.com',
             'password' => 'HrSecret2026!',
@@ -105,7 +106,8 @@ class UserAdminTest extends TestCase
         $this->assertFalse($hr->active);
         $this->actingAs($hr)->get('/admin')->assertForbidden();
 
-        // Deactivated HR cannot log in.
+        // Log out before testing deactivated HR login attempt.
+        $this->post('/admin/logout');
         $this->post('/admin/login', [
             'email' => 'hr2@example.com',
             'password' => 'HrSecret2026!',
