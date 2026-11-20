@@ -7,6 +7,6 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void { }
     public function boot(): void
     {
-        Paginator::defaultView('vendor.pagination.tad');
+        Paginator::defaultView('pagination.tad');
     }
 }
