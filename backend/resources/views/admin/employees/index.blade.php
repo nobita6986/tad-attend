@@ -14,7 +14,10 @@
     <form method="post" action="{{ route('admin.employees.store') }}" style="margin-top:1rem">
       @csrf
       <div class="form-grid">
-        <div class="field"><label for="emp-code">Mã nhân viên *</label><input id="emp-code" required name="code" value="{{ old('code') }}" placeholder="NV001"></div>
+        <div class="field">
+          <label for="emp-code">Mã nhân viên * <span class="muted small">(tự sinh · có thể sửa)</span></label>
+          <input id="emp-code" name="code" maxlength="32" value="{{ old('code', $suggestedCode) }}" placeholder="{{ $suggestedCode }}">
+        </div>
         <div class="field"><label for="emp-name">Họ và tên *</label><input id="emp-name" required name="full_name" value="{{ old('full_name') }}" placeholder="Nguyễn Văn A"></div>
         <div class="field">
           <label for="emp-gender">Giới tính</label>

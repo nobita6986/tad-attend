@@ -319,6 +319,7 @@ class DeviceController extends Controller
             ->get();
 
         return response()->json([
+            'next_employee_code' => Employee::suggestNextCode(),
             'shifts' => $shifts->map(fn ($s) => [
                 'id' => $s->id,
                 'code' => $s->code,
