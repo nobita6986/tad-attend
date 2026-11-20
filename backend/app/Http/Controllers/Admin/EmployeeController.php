@@ -24,11 +24,17 @@ class EmployeeController extends Controller
                 ->withQueryString(),
             'perPage' => $perPage,
             'shifts' => Shift::orderBy('name')->get(),
+            'suggestedCode' => Employee::suggestNextCode(),
         ]);
     }
 
     public function store(Request $request)
     {
+        $rawCode = strtoupper(trim((string) $request->input('code', '')));
+        $request->merge([
+            'code' => $rawCode !== '' ? $rawCode : Employee::suggestNextCode(),
+        ]);
+
         $data = $request->validate([
             'code' => ['required','string','max:32','unique:employees,code'],
             'full_name' => ['required','string','max:160'],
@@ -42,7 +48,7 @@ class EmployeeController extends Controller
         ]);
         $employee = Employee::create([...$data, 'active' => true]);
         $this->audit($request, 'employee.created', $employee);
-        return back()->with('success', 'Đã tạo nhân viên.');
+        return back()->with('success', "Đã tạo nhân viên {$employee->code} – {$employee->full_name}. Hãy mở tab Đăng ký trên app chấm công để chụp khuôn mặt.");
     }
 
     public function update(Request $request, Employee $employee)
