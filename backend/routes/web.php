@@ -36,6 +36,8 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin.only'])->grou
         Route::get('/devices', [DeviceAdminController::class, 'index'])->name('devices.index');
         Route::post('/devices', [DeviceAdminController::class, 'store'])->name('devices.store');
         Route::put('/devices/{device}', [DeviceAdminController::class, 'update'])->name('devices.update');
+        Route::post('/devices/{device}/approve', [DeviceAdminController::class, 'approve'])->name('devices.approve');
+        Route::post('/devices/{device}/reject', [DeviceAdminController::class, 'reject'])->name('devices.reject');
         Route::post('/devices/{device}/revoke', [DeviceAdminController::class, 'revoke'])->name('devices.revoke');
 
         Route::get('/users', [UserAdminController::class, 'index'])->name('users.index');

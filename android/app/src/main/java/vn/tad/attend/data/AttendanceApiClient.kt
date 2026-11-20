@@ -13,7 +13,9 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import vn.tad.attend.model.ApiErrorBody
 import vn.tad.attend.model.AttendanceReceipt
+import vn.tad.attend.model.DeviceActivationResponse
 import vn.tad.attend.model.DeviceInfo
+import vn.tad.attend.model.DeviceRegistrationResponse
 import vn.tad.attend.model.DirectEnrollResponse
 import vn.tad.attend.model.EnrolledPerson
 import vn.tad.attend.model.EnrollmentOptionsResponse
@@ -25,7 +27,24 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-class ApiException(val statusCode: Int?, message: String) : IOException(message)
+class ApiException(
+    val statusCode: Int?,
+    message: String,
+    val errorStatus: String? = null,
+) : IOException(message)
+
+@Serializable
+private data class DeviceActivatePayload(
+    val hardware_id: String,
+    val device_model: String? = null,
+)
+
+@Serializable
+private data class DeviceRegisterPayload(
+    val hardware_id: String,
+    val name: String? = null,
+    val device_model: String? = null,
+)
 
 @Serializable
 private data class EnrollmentPayload(
@@ -97,12 +116,50 @@ class AttendanceApiClient(
         httpClient.newCall(request).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                val serverMsg = runCatching { json.decodeFromString<ApiErrorBody>(raw).message }.getOrNull()
-                val detail = serverMsg?.takeIf { it.isNotBlank() } ?: "Lỗi kết nối máy chủ"
-                throw ApiException(response.code, "HTTP ${response.code}: $detail")
+                val errBody = runCatching { json.decodeFromString<ApiErrorBody>(raw) }.getOrNull()
+                val detail = errBody?.message?.takeIf { it.isNotBlank() } ?: "Lỗi kết nối máy chủ"
+                throw ApiException(response.code, "HTTP ${response.code}: $detail", errBody?.status)
             }
             json.decodeFromString<T>(raw)
         }
+    }
+
+    suspend fun registerByHardwareId(
+        baseUrl: String,
+        hardwareId: String,
+        name: String? = null,
+        deviceModel: String? = null,
+    ): DeviceRegistrationResponse {
+        val payload = DeviceRegisterPayload(
+            hardware_id = hardwareId.trim().uppercase(Locale.US),
+            name = name?.trim()?.takeIf { it.isNotEmpty() },
+            device_model = deviceModel?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        val body = json.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder()
+            .url(buildUrl(baseUrl, "devices/register"))
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+        return executeJson(req)
+    }
+
+    suspend fun activateByHardwareId(
+        baseUrl: String,
+        hardwareId: String,
+        deviceModel: String? = null,
+    ): DeviceActivationResponse {
+        val payload = DeviceActivatePayload(
+            hardware_id = hardwareId.trim().uppercase(Locale.US),
+            device_model = deviceModel?.trim()?.takeIf { it.isNotEmpty() },
+        )
+        val body = json.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder()
+            .url(buildUrl(baseUrl, "devices/activate"))
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+        return executeJson(req)
     }
 
     suspend fun getDeviceInfo(baseUrl: String, token: String?): DeviceInfo {

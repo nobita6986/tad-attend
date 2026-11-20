@@ -27,6 +27,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Badge
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PersonAdd
@@ -69,7 +70,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -163,6 +167,9 @@ fun TadAttendApp(viewModel: AttendanceViewModel) {
                         onRequestCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                         onFrame = viewModel::onCameraFrame,
                         onReconnect = viewModel::connect,
+                        onRequestRegistration = { customName ->
+                            viewModel.requestAutoRegistration(customName)
+                        },
                         onSyncRoster = viewModel::refreshRoster,
                     )
 
@@ -188,6 +195,14 @@ fun TadAttendApp(viewModel: AttendanceViewModel) {
                                 viewModel.saveSettingsAndConnect(url, token)
                                 selectedTab = 0
                             },
+                            onRequestRegistration = { url, customName ->
+                                viewModel.requestAutoRegistration(customName, url)
+                                selectedTab = 0
+                            },
+                            onActivateByHardwareId = { url ->
+                                viewModel.activateByHardwareIdNow(url)
+                                selectedTab = 0
+                            },
                             onRefreshRoster = viewModel::refreshRoster,
                             onLock = viewModel::lockAdmin,
                         )
@@ -207,6 +222,7 @@ private fun KioskScreen(
     onRequestCamera: () -> Unit,
     onFrame: (vn.tad.attend.camera.AnalyzedFrame) -> Unit,
     onReconnect: () -> Unit,
+    onRequestRegistration: (String) -> Unit,
     onSyncRoster: () -> Unit,
 ) {
     Column(
@@ -248,8 +264,9 @@ private fun KioskScreen(
         val frameBorderColor = when {
             ui.lastReceipt?.reviewState == "accepted" -> Color(0xFF087647)
             ui.isError -> MaterialTheme.colorScheme.error
-            ui.livenessStage == LivenessStage.TURN_OPPOSITE_SIDE ||
-                ui.livenessStage == LivenessStage.LOOK_STRAIGHT -> Color(0xFF1955AA)
+            ui.livenessStage == LivenessStage.LOOK_STRAIGHT ||
+                ui.livenessStage == LivenessStage.READY_TO_CAPTURE -> Color(0xFF10B981)
+            ui.livenessStage == LivenessStage.VERIFY_LIVENESS -> Color(0xFF2563EB)
             else -> Color(0xFF94A3B8)
         }
 
@@ -270,8 +287,39 @@ private fun KioskScreen(
                 Box(
                     modifier = Modifier
                         .size(width = 220.dp, height = 280.dp)
-                        .border(2.dp, Color.White.copy(alpha = 0.65f), CircleShape),
+                        .border(2.dp, frameBorderColor.copy(alpha = 0.85f), CircleShape),
                 )
+                if (ui.isConnected) {
+                    val stepPillText = when (ui.livenessStage) {
+                        LivenessStage.LOOK_STRAIGHT, LivenessStage.READY_TO_CAPTURE -> "✓ Đã xác thực · Nhìn thẳng..."
+                        LivenessStage.COOLDOWN_WAIT_LEAVE -> "✓ Đã ghi nhận"
+                        LivenessStage.VERIFY_LIVENESS -> "Bước 1/2: Chớp mắt hoặc quay nhẹ đầu"
+                        LivenessStage.FACE_TOO_SMALL -> "Đưa mặt lại gần hơn"
+                        LivenessStage.MULTIPLE_FACES -> "Chỉ đứng 1 người trong khung"
+                        else -> "Đưa khuôn mặt vào khung"
+                    }
+                    val pillBg = when (ui.livenessStage) {
+                        LivenessStage.LOOK_STRAIGHT, LivenessStage.READY_TO_CAPTURE, LivenessStage.COOLDOWN_WAIT_LEAVE ->
+                            Color(0xFF047857).copy(alpha = 0.88f)
+                        LivenessStage.MULTIPLE_FACES -> Color(0xFFDC2626).copy(alpha = 0.90f)
+                        else -> Color(0xFF0F172A).copy(alpha = 0.72f)
+                    }
+                    Surface(
+                        color = pillBg,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 12.dp, start = 12.dp, end = 12.dp),
+                    ) {
+                        Text(
+                            text = stepPillText,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        )
+                    }
+                }
             } else {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -335,9 +383,97 @@ private fun KioskScreen(
                     textAlign = TextAlign.Center,
                 )
                 if (!ui.isConnected && !ui.isConnecting) {
+                    val clipboard = LocalClipboardManager.current
+                    var copiedHw by remember { mutableStateOf(false) }
+                    var customDeviceName by remember { mutableStateOf("") }
+                    val isPending = ui.registrationStatus == "pending"
+                    val isRejected = ui.registrationStatus == "rejected"
+                    val isRevoked = ui.registrationStatus == "revoked"
+
                     Spacer(Modifier.height(10.dp))
-                    Button(onClick = onReconnect) {
-                        Text("Kết nối lại máy chủ")
+                    Surface(
+                        color = if (isPending) Color(0xFFFFFBEB) else Color(0xFFEFF6FF),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, if (isPending) Color(0xFFF59E0B) else Color(0xFFBFDBFE)),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Mã máy cố định", style = MaterialTheme.typography.labelSmall, color = Color(0xFF475569))
+                                Text(
+                                    text = ui.hardwareId,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF142946),
+                                )
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    clipboard.setText(AnnotatedString(ui.hardwareId))
+                                    copiedHw = true
+                                },
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text(if (copiedHw) "Đã chép" else "Sao chép")
+                            }
+                        }
+                    }
+
+                    if (isPending) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            Text(
+                                text = "Tự động kiểm tra duyệt mỗi 5 giây...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF92400E),
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedButton(onClick = onReconnect) {
+                            Text("Kiểm tra ngay")
+                        }
+                    } else if (!isRevoked) {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = customDeviceName,
+                            onValueChange = { customDeviceName = it },
+                            label = { Text("Tên thiết bị (tùy chọn, vd: Cổng chính)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Button(
+                                onClick = { onRequestRegistration(customDeviceName) },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(if (isRejected) "Gửi đăng ký lại" else "Đăng ký thiết bị")
+                            }
+                            OutlinedButton(onClick = onReconnect) {
+                                Text("Kết nối lại")
+                            }
+                        }
+                    } else {
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(onClick = onReconnect) {
+                            Text("Thử kết nối lại")
+                        }
                     }
                 }
             }
@@ -666,11 +802,16 @@ private fun EnrollmentScreen(
 private fun SettingsScreen(
     ui: AttendUiState,
     onSave: (String, String) -> Unit,
+    onRequestRegistration: (String, String) -> Unit,
+    onActivateByHardwareId: (String) -> Unit,
     onRefreshRoster: () -> Unit,
     onLock: () -> Unit,
 ) {
     var serverUrl by rememberSaveable(ui.serverUrl) { mutableStateOf(ui.serverUrl) }
     var newToken by rememberSaveable { mutableStateOf("") }
+    var customDeviceName by rememberSaveable { mutableStateOf("") }
+    val clipboard = LocalClipboardManager.current
+    var copiedHw by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -689,6 +830,69 @@ private fun SettingsScreen(
                 Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
                 Text("Khóa")
+            }
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFEFF6FF)),
+            border = BorderStroke(1.dp, Color(0xFFBFDBFE)),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Mã máy cố định (Hardware ID)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF142946))
+                Text(
+                    text = "Bấm 'Đăng ký thiết bị tự động' để gửi Mã máy này lên trang Quản trị → Thiết bị. Sau khi Admin bấm Đồng ý, máy sẽ tự kết nối mãi mãi kể cả khi nâng cấp hay cài lại app.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF475569),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = ui.hardwareId,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF1955AA),
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            clipboard.setText(AnnotatedString(ui.hardwareId))
+                            copiedHw = true
+                        },
+                    ) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text(if (copiedHw) "Đã chép" else "Sao chép")
+                    }
+                }
+                OutlinedTextField(
+                    value = customDeviceName,
+                    onValueChange = { customDeviceName = it },
+                    label = { Text("Tên thiết bị khi gửi đăng ký (tùy chọn)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(
+                        onClick = { onRequestRegistration(serverUrl, customDeviceName) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text("Đăng ký tự động")
+                    }
+                    OutlinedButton(onClick = { onActivateByHardwareId(serverUrl) }) {
+                        Text("Kích hoạt ngay")
+                    }
+                }
             }
         }
 
@@ -716,7 +920,7 @@ private fun SettingsScreen(
                     onValueChange = { newToken = it },
                     label = {
                         Text(
-                            if (ui.hasToken) "Token thiết bị (để trống nếu giữ nguyên)" else "Token thiết bị (tạo từ /admin/devices)",
+                            if (ui.hasToken) "Token thủ công (không cần nếu dùng Mã máy)" else "Token thủ công (tùy chọn dự phòng)",
                         )
                     },
                     singleLine = true,

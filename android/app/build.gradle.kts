@@ -64,8 +64,12 @@ android {
         applicationId = "vn.tad.attend"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2.20112026"
+        versionCode = 6
+        versionName = "1.0.5.20112026"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
 
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://chamcong.tananhduong.com.vn\"")
         buildConfigField("String", "EXPECTED_MODEL_ID", "\"sface\"")
@@ -74,8 +78,37 @@ android {
         buildConfigField("String", "SFACE_ASSET_PATH", "\"models/face_recognition_sface_2021dec.onnx\"")
     }
 
+    val ciKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val ciKeystorePass = System.getenv("ANDROID_KEYSTORE_PASS")
+    val ciKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val ciKeyPass = System.getenv("ANDROID_KEY_PASS")
+    val hasPersistentSigning = !ciKeystorePath.isNullOrBlank() &&
+        !ciKeystorePass.isNullOrBlank() &&
+        !ciKeyAlias.isNullOrBlank() &&
+        !ciKeyPass.isNullOrBlank() &&
+        File(ciKeystorePath).exists()
+
+    signingConfigs {
+        if (hasPersistentSigning) {
+            create("persistent") {
+                storeFile = File(ciKeystorePath!!)
+                storePassword = ciKeystorePass
+                keyAlias = ciKeyAlias
+                keyPassword = ciKeyPass
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (hasPersistentSigning) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
+        }
         release {
+            if (hasPersistentSigning) {
+                signingConfig = signingConfigs.getByName("persistent")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

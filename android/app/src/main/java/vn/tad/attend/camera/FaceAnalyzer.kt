@@ -23,19 +23,20 @@ data class AnalyzedFrame(
  * Converts each CameraX frame to an upright Bitmap before running ML Kit Face Detection,
  * guaranteeing that landmark & boundingBox coordinates match the Bitmap pixel coordinates 1:1.
  *
- * The consumer receives ownership of [AnalyzedFrame.bitmap] and MUST recycle it when done.
+ * Uses FAST mode + eye-open classification + 5-point landmarks (~14-15 fps on mid-range phones)
+ * so blink and gentle head-turn challenges respond immediately without dropping turns.
  */
 class FaceAnalyzer(
-    private val minFrameIntervalMs: Long = 160L,
+    private val minFrameIntervalMs: Long = 70L,
     private val onAnalyzed: (AnalyzedFrame) -> Unit,
 ) : ImageAnalysis.Analyzer, Closeable {
 
     private val detector: FaceDetector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
-            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
             .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
-            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
-            .setMinFaceSize(0.15f)
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
+            .setMinFaceSize(0.14f)
             .build(),
     )
 
@@ -68,7 +69,6 @@ class FaceAnalyzer(
             return
         }
 
-        // Release CameraX buffer immediately; ML Kit processes the upright bitmap copy.
         imageProxy.close()
 
         val input = InputImage.fromBitmap(upright, 0)

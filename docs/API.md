@@ -1,8 +1,16 @@
 # REST API v1 — HTTPS + Bearer device token
 Base URL: `https://YOUR_DOMAIN/api/v1`. JSON trừ API upload multipart. Lỗi theo JSON HTTP 4xx/5xx. Token mỗi thiết bị.
 
+## POST /devices/register (public, rate-limited 20/min)
+Body: `{ "hardware_id": "AND-XXXX-XXXX-XXXX-XXXX", "name": "Cổng chính (tùy chọn)", "device_model": "Samsung SM-A546E (Android 14)" }`.
+Gửi yêu cầu đăng ký tự động thiết bị lên hàng chờ duyệt trên web quản trị (`/admin/devices`). Trả về `202` với `{ "status": "pending", ... }` nếu đang chờ Admin duyệt; trả về `200` kèm `token` ngay nếu thiết bị đã được duyệt và đang hoạt động; trả về `403` (`status: "revoked"`) nếu đã thu hồi.
+
+## POST /devices/activate (public, rate-limited 20/min)
+Body: `{ "hardware_id": "AND-XXXX-XXXX-XXXX-XXXX", "device_model": "..." }`.
+Nếu máy đã được Admin duyệt (`approval_status = approved` & `active = true`), backend tự xoay mới Bearer token và trả về `{ "status": "approved", "token": "...", "device_id": "uuid", "name": "...", "direction": "both", "hardware_id": "AND-..." }`. Trả về `404` (`status: "unregistered"`) nếu chưa đăng ký, `403` với `status: "pending" | "rejected" | "revoked"` tùy trạng thái.
+
 ## GET /device
-Response: `{ "device_id":"uuid", "name":"Cổng 1", "direction":"in", "server_time":"2026-11-08T00:00:00Z", "min_score":0.42, "model_id":"sface", "model_version":"2021dec", "embedding_dimensions":128 }`.
+Response: `{ "device_id":"uuid", "name":"Cổng 1", "hardware_id":"AND-XXXX-XXXX-XXXX-XXXX", "direction":"both", "server_time":"2026-11-08T00:00:00Z", "min_score":0.42, "model_id":"sface", "model_version":"2021dec", "embedding_dimensions":128 }`.
 `min_score` chỉ là cấu hình kỹ thuật **không phải** ngưỡng dùng thực tế nếu chưa hiệu chuẩn.
 
 ## GET /roster?model_id=...&model_version=...

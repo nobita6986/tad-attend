@@ -96,4 +96,131 @@ class DeviceAdminTest extends TestCase
             ->getJson('/api/v1/device')
             ->assertUnauthorized();
     }
+
+    public function test_device_activates_automatically_by_fixed_hardware_id_across_reinstalls(): void
+    {
+        config()->set('attendance.model_id', 'sface');
+        config()->set('attendance.model_version', '2021dec');
+        config()->set('attendance.embedding_dimensions', 128);
+        config()->set('attendance.min_score', 0.42);
+
+        $admin = $this->makeAdmin();
+
+        // Unregistered hardware ID returns 404 from the controller (not route-not-found).
+        $this->postJson('/api/v1/devices/activate', ['hardware_id' => 'AND-1111-2222-3333-4444'])
+            ->assertNotFound()
+            ->assertSee('AND-1111-2222-3333-4444');
+
+        // Admin registers device bound to fixed hardware_id (lowercase input normalized to uppercase).
+        $this->actingAs($admin)->post('/admin/devices', [
+            'name' => 'TB2 Cổng chính',
+            'hardware_id' => 'and-1111-2222-3333-4444',
+            'direction' => 'both',
+        ])->assertRedirect('/admin/devices');
+
+        $device = Device::where('hardware_id', 'AND-1111-2222-3333-4444')->firstOrFail();
+
+        // First activation yields a working bearer token.
+        $act1 = $this->postJson('/api/v1/devices/activate', ['hardware_id' => 'AND-1111-2222-3333-4444'])
+            ->assertOk()
+            ->assertJsonPath('device_id', $device->id)
+            ->assertJsonPath('hardware_id', 'AND-1111-2222-3333-4444');
+        $token1 = $act1->json('token');
+
+        $this->withToken($token1)->getJson('/api/v1/device')
+            ->assertOk()
+            ->assertJsonPath('name', 'TB2 Cổng chính')
+            ->assertJsonPath('hardware_id', 'AND-1111-2222-3333-4444');
+
+        // Simulating app reinstall: second activation rotates token cleanly without admin intervention.
+        $act2 = $this->postJson('/api/v1/devices/activate', ['hardware_id' => 'AND-1111-2222-3333-4444'])
+            ->assertOk();
+        $token2 = $act2->json('token');
+        $this->assertNotSame($token1, $token2);
+
+        $this->withToken($token1)->getJson('/api/v1/device')->assertUnauthorized();
+        $this->withToken($token2)->getJson('/api/v1/device')->assertOk();
+
+        // Revoking device blocks both token and future hardware_id activation.
+        $this->actingAs($admin)->post("/admin/devices/{$device->id}/revoke")->assertRedirect();
+        $this->withToken($token2)->getJson('/api/v1/device')->assertUnauthorized();
+        $this->postJson('/api/v1/devices/activate', ['hardware_id' => 'AND-1111-2222-3333-4444'])
+            ->assertForbidden()
+            ->assertJsonPath('status', 'revoked');
+    }
+
+    public function test_device_self_registration_pending_reject_reapply_and_approve_flow(): void
+    {
+        config()->set('attendance.model_id', 'sface');
+        config()->set('attendance.model_version', '2021dec');
+        config()->set('attendance.embedding_dimensions', 128);
+        config()->set('attendance.min_score', 0.42);
+
+        $admin = $this->makeAdmin();
+        $hwId = 'AND-AAAA-BBBB-CCCC-DDDD';
+
+        // 1. App self-registers -> 202 pending.
+        $reg1 = $this->postJson('/api/v1/devices/register', [
+            'hardware_id' => strtolower($hwId),
+            'name' => 'Máy lễ tân',
+            'device_model' => 'Samsung SM-A546E (Android 14)',
+        ])->assertStatus(202)
+            ->assertJsonPath('status', 'pending')
+            ->assertJsonPath('hardware_id', $hwId);
+
+        $device = Device::where('hardware_id', $hwId)->firstOrFail();
+        $this->assertFalse($device->active);
+        $this->assertSame('pending', $device->approval_status);
+
+        // Pending device appears in admin devices page & cannot activate yet.
+        $this->actingAs($admin)->get('/admin/devices')
+            ->assertOk()
+            ->assertSee('Thiết bị đang chờ duyệt (1)')
+            ->assertSee($hwId)
+            ->assertSee('Samsung SM-A546E (Android 14)');
+
+        $this->postJson('/api/v1/devices/activate', ['hardware_id' => $hwId])
+            ->assertForbidden()
+            ->assertJsonPath('status', 'pending');
+
+        // 2. Admin rejects -> activate returns status=rejected.
+        $this->actingAs($admin)->post("/admin/devices/{$device->id}/reject")
+            ->assertRedirect('/admin/devices');
+
+        $this->postJson('/api/v1/devices/activate', ['hardware_id' => $hwId])
+            ->assertForbidden()
+            ->assertJsonPath('status', 'rejected');
+
+        // 3. App re-submits registration -> transitions back to pending (202).
+        $this->postJson('/api/v1/devices/register', [
+            'hardware_id' => $hwId,
+            'name' => 'Máy cổng kho',
+            'device_model' => 'Samsung SM-A546E (Android 14)',
+        ])->assertStatus(202)
+            ->assertJsonPath('status', 'pending');
+
+        // 4. Admin approves with renamed label & mode -> device activates cleanly!
+        $this->actingAs($admin)->post("/admin/devices/{$device->id}/approve", [
+            'name' => 'Cổng kho 1',
+            'direction' => 'in',
+        ])->assertRedirect('/admin/devices');
+
+        $act = $this->postJson('/api/v1/devices/activate', ['hardware_id' => $hwId])
+            ->assertOk()
+            ->assertJsonPath('status', 'approved')
+            ->assertJsonPath('name', 'Cổng kho 1')
+            ->assertJsonPath('direction', 'in');
+
+        $token = $act->json('token');
+        $this->withToken($token)->getJson('/api/v1/device')
+            ->assertOk()
+            ->assertJsonPath('name', 'Cổng kho 1')
+            ->assertJsonPath('hardware_id', $hwId);
+
+        // 5. Re-calling register on already-approved active device immediately returns 200 approved.
+        $regApproved = $this->postJson('/api/v1/devices/register', ['hardware_id' => $hwId])
+            ->assertOk()
+            ->assertJsonPath('status', 'approved');
+        $this->withToken($regApproved->json('token'))->getJson('/api/v1/device')->assertOk();
+    }
 }
