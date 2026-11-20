@@ -33,7 +33,7 @@ class AttendanceApiClientTest {
             client.getDeviceInfo("http://example.com", "token-123")
         } catch (e: ApiException) {
             threw = true
-            assertTrue(e.message!!.contains("HTTPS"))
+            assertTrue(e.message!!.contains("https://", ignoreCase = true))
         }
         assertTrue(threw)
     }
@@ -189,5 +189,7 @@ class AttendanceApiClientTest {
         }
         assertEquals(403, caught?.statusCode)
         assertEquals("rejected", caught?.errorStatus)
+        assertEquals("Bị từ chối", caught?.message)
+        assertTrue(!(caught?.message.orEmpty().contains("HTTP", ignoreCase = true)))
     }
 }

@@ -22,10 +22,14 @@ import vn.tad.attend.model.EnrollmentOptionsResponse
 import vn.tad.attend.model.EnrollmentResponse
 import vn.tad.attend.model.RosterResponse
 import java.io.IOException
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 class ApiException(
     val statusCode: Int?,
@@ -95,9 +99,9 @@ class AttendanceApiClient(
     private fun buildUrl(baseUrl: String, path: String, query: Map<String, String> = emptyMap()): okhttp3.HttpUrl {
         val trimmed = baseUrl.trim().trimEnd('/')
         val parsed = trimmed.toHttpUrlOrNull()
-            ?: throw ApiException(null, "Địa chỉ máy chủ không hợp lệ.")
+            ?: throw ApiException(null, "Địa chỉ máy chủ chưa đúng. Vui lòng báo quản lý kiểm tra.")
         if (!allowCleartextForTest && parsed.scheme != "https") {
-            throw ApiException(null, "Máy chủ bắt buộc dùng HTTPS.")
+            throw ApiException(null, "Địa chỉ máy chủ cần dùng kết nối bảo mật (https://).")
         }
         val builder = parsed.newBuilder().addPathSegments("api/v1/$path")
         for ((k, v) in query) {
@@ -108,19 +112,47 @@ class AttendanceApiClient(
 
     private fun requireToken(token: String?): String {
         val clean = token?.trim().orEmpty()
-        if (clean.isEmpty()) throw ApiException(null, "Chưa nhập token thiết bị trong mục Cấu hình.")
+        if (clean.isEmpty()) throw ApiException(null, "Máy chưa được kết nối. Vui lòng bấm Đăng ký thiết bị.")
         return clean
     }
 
+    private fun defaultMessageForCode(code: Int): String = when (code) {
+        401 -> "Phiên kết nối của máy đã hết hạn. Vui lòng thử kết nối lại."
+        403 -> "Máy chấm công chưa được cấp quyền hoạt động."
+        404 -> "Không tìm thấy thông tin thiết bị trên hệ thống."
+        409 -> "Bạn vừa chấm công trước đó rồi."
+        422 -> "Thông tin gửi lên chưa đầy đủ hoặc chưa đúng."
+        429 -> "Thao tác quá nhanh. Vui lòng đợi vài giây rồi thử lại."
+        in 500..599 -> "Hệ thống đang bận. Vui lòng thử lại sau ít phút."
+        else -> "Không thể kết nối máy chủ. Vui lòng kiểm tra mạng và thử lại."
+    }
+
     private suspend inline fun <reified T> executeJson(request: Request): T = withContext(Dispatchers.IO) {
-        httpClient.newCall(request).execute().use { response ->
-            val raw = response.body?.string().orEmpty()
-            if (!response.isSuccessful) {
+        val response = try {
+            httpClient.newCall(request).execute()
+        } catch (_: UnknownHostException) {
+            throw ApiException(null, "Không có kết nối mạng. Vui lòng kiểm tra Wi-Fi hoặc 4G.")
+        } catch (_: ConnectException) {
+            throw ApiException(null, "Không kết nối được tới máy chủ. Vui lòng kiểm tra mạng.")
+        } catch (_: SocketTimeoutException) {
+            throw ApiException(null, "Kết nối mạng hơi chậm. Vui lòng thử lại.")
+        } catch (_: SSLException) {
+            throw ApiException(null, "Không thể xác thực kết nối an toàn tới máy chủ. Kiểm tra lại ngày giờ trên điện thoại.")
+        } catch (_: IOException) {
+            throw ApiException(null, "Mạng đang không ổn định. Vui lòng thử lại sau vài giây.")
+        }
+        response.use { res ->
+            val raw = res.body?.string().orEmpty()
+            if (!res.isSuccessful) {
                 val errBody = runCatching { json.decodeFromString<ApiErrorBody>(raw) }.getOrNull()
-                val detail = errBody?.message?.takeIf { it.isNotBlank() } ?: "Lỗi kết nối máy chủ"
-                throw ApiException(response.code, "HTTP ${response.code}: $detail", errBody?.status)
+                val detail = errBody?.message?.takeIf { it.isNotBlank() } ?: defaultMessageForCode(res.code)
+                throw ApiException(res.code, detail, errBody?.status)
             }
-            json.decodeFromString<T>(raw)
+            try {
+                json.decodeFromString<T>(raw)
+            } catch (_: Throwable) {
+                throw ApiException(res.code, "Máy chủ phản hồi chưa đúng định dạng. Vui lòng thử lại.")
+            }
         }
     }
 

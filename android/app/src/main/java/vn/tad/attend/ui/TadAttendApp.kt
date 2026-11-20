@@ -291,9 +291,9 @@ private fun KioskScreen(
                 )
                 if (ui.isConnected) {
                     val stepPillText = when (ui.livenessStage) {
-                        LivenessStage.LOOK_STRAIGHT, LivenessStage.READY_TO_CAPTURE -> "✓ Đã xác thực · Nhìn thẳng..."
+                        LivenessStage.LOOK_STRAIGHT, LivenessStage.READY_TO_CAPTURE -> "✓ Giữ yên nhìn thẳng..."
                         LivenessStage.COOLDOWN_WAIT_LEAVE -> "✓ Đã ghi nhận"
-                        LivenessStage.VERIFY_LIVENESS -> "Bước 1/2: Chớp mắt hoặc quay nhẹ đầu"
+                        LivenessStage.VERIFY_LIVENESS -> "Chớp mắt hoặc quay nhẹ đầu"
                         LivenessStage.FACE_TOO_SMALL -> "Đưa mặt lại gần hơn"
                         LivenessStage.MULTIPLE_FACES -> "Chỉ đứng 1 người trong khung"
                         else -> "Đưa khuôn mặt vào khung"
@@ -843,9 +843,9 @@ private fun SettingsScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("Mã máy cố định (Hardware ID)", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF142946))
+                Text("Mã máy chấm công", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, color = Color(0xFF142946))
                 Text(
-                    text = "Bấm 'Đăng ký thiết bị tự động' để gửi Mã máy này lên trang Quản trị → Thiết bị. Sau khi Admin bấm Đồng ý, máy sẽ tự kết nối mãi mãi kể cả khi nâng cấp hay cài lại app.",
+                    text = "Bấm 'Đăng ký tự động' để gửi Mã máy này cho quản lý duyệt. Sau khi quản lý bấm Đồng ý, máy sẽ tự kết nối mãi mãi kể cả khi cập nhật ứng dụng.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF475569),
                 )
@@ -906,11 +906,11 @@ private fun SettingsScreen(
                     .padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("Kết nối máy chủ HTTPS", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                Text("Kết nối máy chủ", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 OutlinedTextField(
                     value = serverUrl,
                     onValueChange = { serverUrl = it },
-                    label = { Text("Địa chỉ máy chủ (HTTPS)") },
+                    label = { Text("Địa chỉ máy chủ") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                     modifier = Modifier.fillMaxWidth(),
@@ -920,7 +920,7 @@ private fun SettingsScreen(
                     onValueChange = { newToken = it },
                     label = {
                         Text(
-                            if (ui.hasToken) "Token thủ công (không cần nếu dùng Mã máy)" else "Token thủ công (tùy chọn dự phòng)",
+                            if (ui.hasToken) "Mã kết nối dự phòng (không cần nhập)" else "Mã kết nối dự phòng (tùy chọn)",
                         )
                     },
                     singleLine = true,
@@ -938,7 +938,7 @@ private fun SettingsScreen(
                     }
                     if (ui.isConnected) {
                         OutlinedButton(onClick = onRefreshRoster) {
-                            Text("Đồng bộ NV")
+                            Text("Cập nhật danh sách")
                         }
                     }
                 }
@@ -958,17 +958,15 @@ private fun SettingsScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Badge, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(6.dp))
-                    Text("Thông tin thiết bị & AI", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+                    Text("Thông tin máy chấm công", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
                 }
-                InfoRow("Trạng thái AI", ui.modelStatus)
-                InfoRow("Phiên bản app", "V${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE})")
+                InfoRow("Nhận diện khuôn mặt", ui.modelStatus)
+                InfoRow("Phiên bản", "V${BuildConfig.VERSION_NAME}")
                 val info = ui.deviceInfo
                 if (info != null) {
-                    InfoRow("Tên thiết bị", info.name)
+                    InfoRow("Tên máy", info.name)
                     InfoRow("Chế độ", AttendanceViewModel.directionLabel(info.direction))
-                    InfoRow("Model máy chủ", "${info.modelId} / ${info.modelVersion} (${info.embeddingDimensions}d)")
-                    InfoRow("Ngưỡng máy chủ", String.format(Locale.US, "%.3f", info.minScore))
-                    InfoRow("Nhân viên trong RAM", "${ui.rosterCount}")
+                    InfoRow("Số nhân viên đã tải", "${ui.rosterCount} người")
                 } else {
                     InfoRow("Kết nối", "Chưa kết nối")
                 }
