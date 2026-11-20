@@ -7,103 +7,188 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ asset('css/admin.css') }}?v=20261120">
+  <link rel="stylesheet" href="{{ asset('css/admin.css') }}?v=20261120b">
 </head>
-<body>
-<header class="site-header" id="site-header">
-  <div class="header-inner" id="header-inner">
-    <a class="brand" href="{{ auth()->check() ? route('admin.dashboard') : route('login') }}">
-      <span class="brand-mark"><x-icon name="scan" :size="20" /></span>
-      <span>TAD Attend</span>
-      <span class="brand-sub">Quản trị</span>
-    </a>
+<body class="{{ auth()->check() ? 'has-sidebar' : 'auth-page' }}">
+@if(auth()->check())
+  @php
+    $user = auth()->user();
+    $isSystemAdmin = $user->isSystemAdmin();
+    $initials = mb_strtoupper(mb_substr(trim($user->name ?: $user->email), 0, 2));
+    $roleTag = $user->effectiveRole() === 'admin' ? 'Admin' : 'HR';
 
-    @if(auth()->check())
-    <nav class="site-nav" aria-label="Điều hướng quản trị">
+    $navGroups = [
+      [
+        'label' => 'Tổng quan',
+        'items' => [
+          ['route' => 'admin.dashboard', 'match' => 'admin.dashboard', 'label' => 'Tổng quan', 'icon' => 'dashboard'],
+        ],
+      ],
+      [
+        'label' => 'Chấm công',
+        'items' => [
+          ['route' => 'admin.attendance.index', 'match' => 'admin.attendance.*', 'label' => 'Lượt quét',    'icon' => 'scan'],
+          ['route' => 'admin.reports.index',    'match' => 'admin.reports.*',    'label' => 'Báo cáo công', 'icon' => 'chart'],
+        ],
+      ],
+      [
+        'label' => 'Nhân sự',
+        'items' => [
+          ['route' => 'admin.employees.index', 'match' => 'admin.employees.*', 'label' => 'Nhân viên', 'icon' => 'users'],
+          ['route' => 'admin.shifts.index',    'match' => 'admin.shifts.*',    'label' => 'Ca làm',    'icon' => 'clock'],
+        ],
+      ],
+    ];
+
+    if ($isSystemAdmin) {
+      $navGroups[] = [
+        'label' => 'Hệ thống',
+        'items' => [
+          ['route' => 'admin.devices.index', 'match' => 'admin.devices.*', 'label' => 'Thiết bị',  'icon' => 'device'],
+          ['route' => 'admin.users.index',   'match' => 'admin.users.*',   'label' => 'Tài khoản', 'icon' => 'shield'],
+        ],
+      ];
+    }
+  @endphp
+
+  <div class="app-shell">
+    <header class="mobile-header" id="mobile-header">
+      <a class="brand" href="{{ route('admin.dashboard') }}">
+        <span class="brand-mark"><x-icon name="scan" :size="19" /></span>
+        <span>TAD Attend</span>
+      </a>
       <button
         class="menu-button"
         type="button"
-        popovertarget="site-menu"
+        popovertarget="app-sidebar"
         popovertargetaction="toggle"
-        aria-controls="site-menu"
+        aria-controls="app-sidebar"
       >
         <x-icon name="menu" :size="18" />
         <span>Danh mục</span>
       </button>
+    </header>
 
-      @php
-        $isSystemAdmin = auth()->user()->isSystemAdmin();
-        $navItems = [
-          ['route' => 'admin.dashboard',        'match' => 'admin.dashboard',   'label' => 'Tổng quan', 'icon' => 'dashboard', 'adminOnly' => false],
-          ['route' => 'admin.employees.index',  'match' => 'admin.employees.*', 'label' => 'Nhân viên', 'icon' => 'users',     'adminOnly' => false],
-          ['route' => 'admin.shifts.index',     'match' => 'admin.shifts.*',    'label' => 'Ca làm',    'icon' => 'clock',     'adminOnly' => false],
-          ['route' => 'admin.attendance.index', 'match' => 'admin.attendance.*','label' => 'Lượt quét', 'icon' => 'scan',      'adminOnly' => false],
-          ['route' => 'admin.reports.index',    'match' => 'admin.reports.*',   'label' => 'Báo cáo',   'icon' => 'chart',     'adminOnly' => false],
-          ['route' => 'admin.devices.index',    'match' => 'admin.devices.*',   'label' => 'Thiết bị',  'icon' => 'device',    'adminOnly' => true],
-          ['route' => 'admin.users.index',      'match' => 'admin.users.*',     'label' => 'Tài khoản', 'icon' => 'shield',    'adminOnly' => true],
-        ];
-      @endphp
-      <ul id="site-menu" class="site-menu" popover="auto">
-        @foreach($navItems as $item)
-          @continue($item['adminOnly'] && !$isSystemAdmin)
-          @php($isCurrent = request()->routeIs($item['match']))
-          <li>
-            <a href="{{ route($item['route']) }}" @if($isCurrent) aria-current="page" @endif>
-              <x-icon :name="$item['icon']" :size="16" />
-              <span>{{ $item['label'] }}</span>
-            </a>
-          </li>
-        @endforeach
-      </ul>
-    </nav>
-
-    <div class="header-actions">
-      @php($initials = mb_strtoupper(mb_substr(trim(auth()->user()->name ?: auth()->user()->email), 0, 2)))
-      @php($roleTag = auth()->user()->effectiveRole() === 'admin' ? 'Admin' : 'HR')
-      <span class="user-chip" title="{{ auth()->user()->email }} ({{ $roleTag }})">
-        <span class="avatar-dot">{{ $initials }}</span>
-        <span>{{ auth()->user()->name ?: $roleTag }} · {{ $roleTag }}</span>
-      </span>
-      <form method="post" action="{{ route('admin.logout') }}" style="margin:0">
-        @csrf
-        <button class="btn-outline btn-sm" type="submit" aria-label="Đăng xuất">
-          <x-icon name="logout" :size="15" />
-          <span>Đăng xuất</span>
+    <aside id="app-sidebar" class="app-sidebar" popover="auto">
+      <div class="sidebar-top">
+        <a class="brand" href="{{ route('admin.dashboard') }}">
+          <span class="brand-mark"><x-icon name="scan" :size="20" /></span>
+          <div>
+            <span class="brand-title">TAD Attend</span>
+            <span class="brand-caption">Quản trị chấm công</span>
+          </div>
+        </a>
+        <button type="button" class="sidebar-close btn-ghost btn-sm" popovertarget="app-sidebar" popovertargetaction="hide" aria-label="Đóng menu">
+          ✕
         </button>
-      </form>
-    </div>
-    @endif
-  </div>
-</header>
-
-<main class="container">
-  @if(session('success'))
-    <div class="alert" role="status">
-      <x-icon name="check" :size="18" style="flex-shrink:0;margin-top:2px" />
-      <div>{{ session('success') }}</div>
-    </div>
-  @endif
-
-  @if($errors->any())
-    <div class="alert alert--error" role="alert">
-      <x-icon name="alert" :size="18" style="flex-shrink:0;margin-top:2px" />
-      <div>
-        <strong>Vui lòng kiểm tra lại thông tin:</strong>
-        <ul>
-          @foreach($errors->all() as $error)
-            <li>{{ $error }}</li>
-          @endforeach
-        </ul>
       </div>
+
+      <nav class="sidebar-nav" aria-label="Điều hướng quản trị">
+        @foreach($navGroups as $group)
+          <div class="nav-group">
+            <div class="nav-group-label">{{ $group['label'] }}</div>
+            <ul class="nav-list">
+              @foreach($group['items'] as $item)
+                @php($isCurrent = request()->routeIs($item['match']))
+                <li>
+                  <a href="{{ route($item['route']) }}" @if($isCurrent) aria-current="page" @endif>
+                    <x-icon :name="$item['icon']" :size="17" />
+                    <span>{{ $item['label'] }}</span>
+                  </a>
+                </li>
+              @endforeach
+            </ul>
+          </div>
+        @endforeach
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="sidebar-user" title="{{ $user->email }}">
+          <span class="avatar-dot">{{ $initials }}</span>
+          <div class="sidebar-user-meta">
+            <strong class="sidebar-user-name">{{ $user->name ?: $roleTag }}</strong>
+            <span class="sidebar-user-role">{{ $roleTag }} · {{ $user->email }}</span>
+          </div>
+        </div>
+        <form method="post" action="{{ route('admin.logout') }}" style="margin:0">
+          @csrf
+          <button class="btn-outline btn-sm" type="submit" style="width:100%">
+            <x-icon name="logout" :size="15" />
+            <span>Đăng xuất</span>
+          </button>
+        </form>
+      </div>
+    </aside>
+
+    <div class="app-main">
+      <main class="container">
+        @if(session('success'))
+          <div class="alert" role="status">
+            <x-icon name="check" :size="18" style="flex-shrink:0;margin-top:2px" />
+            <div>{{ session('success') }}</div>
+          </div>
+        @endif
+
+        @if($errors->any())
+          <div class="alert alert--error" role="alert">
+            <x-icon name="alert" :size="18" style="flex-shrink:0;margin-top:2px" />
+            <div>
+              <strong>Vui lòng kiểm tra lại thông tin:</strong>
+              <ul>
+                @foreach($errors->all() as $error)
+                  <li>{{ $error }}</li>
+                @endforeach
+              </ul>
+            </div>
+          </div>
+        @endif
+
+        @yield('content')
+      </main>
+
+      <footer class="site-footer">
+        TAD Attend · Hệ thống chấm công khuôn mặt on-device (SFace 128d) · Múi giờ Việt Nam (UTC+7)
+      </footer>
     </div>
-  @endif
+  </div>
+@else
+  <header class="auth-header">
+    <a class="brand" href="{{ route('login') }}">
+      <span class="brand-mark"><x-icon name="scan" :size="20" /></span>
+      <span>TAD Attend</span>
+      <span class="brand-sub">Quản trị</span>
+    </a>
+  </header>
 
-  @yield('content')
-</main>
+  <main class="container">
+    @if(session('success'))
+      <div class="alert" role="status">
+        <x-icon name="check" :size="18" style="flex-shrink:0;margin-top:2px" />
+        <div>{{ session('success') }}</div>
+      </div>
+    @endif
 
-<footer class="site-footer">
-  TAD Attend · Hệ thống chấm công khuôn mặt on-device (SFace 128d) · Múi giờ Việt Nam (UTC+7)
-</footer>
+    @if($errors->any())
+      <div class="alert alert--error" role="alert">
+        <x-icon name="alert" :size="18" style="flex-shrink:0;margin-top:2px" />
+        <div>
+          <strong>Vui lòng kiểm tra lại thông tin:</strong>
+          <ul>
+            @foreach($errors->all() as $error)
+              <li>{{ $error }}</li>
+            @endforeach
+          </ul>
+        </div>
+      </div>
+    @endif
+
+    @yield('content')
+  </main>
+
+  <footer class="site-footer">
+    TAD Attend · Hệ thống chấm công khuôn mặt on-device (SFace 128d) · Múi giờ Việt Nam (UTC+7)
+  </footer>
+@endif
 
 <dialog id="evidence-lightbox" class="lightbox" aria-labelledby="lightbox-title">
   <div class="lightbox-head">
@@ -125,44 +210,19 @@
     import('https://unpkg.com/@oddbird/popover-polyfill@latest/dist/popover.min.js').catch(() => {});
   }
 
-  // Responsive navbar measurement (single semantic nav tree, wide inline vs narrow popover)
-  const header = document.getElementById('site-header');
-  const inner = document.getElementById('header-inner');
-  const menu = document.getElementById('site-menu');
-  if (header && inner && menu) {
-    let lastWidth = 0;
-    const syncNav = () => {
-      const currentWidth = header.clientWidth;
-      const isCurrentlyWide = header.classList.contains('is-wide');
-      if (!isCurrentlyWide && currentWidth <= lastWidth && lastWidth > 0) return;
-      lastWidth = currentWidth;
-
-      const wasOpen = menu.matches(':popover-open') || menu.classList.contains(':popover-open');
-      header.classList.add('is-measuring');
-      menu.removeAttribute('popover');
-      header.classList.add('is-wide');
-
-      const fits = inner.scrollWidth <= inner.clientWidth + 1;
-      if (fits) {
-        header.classList.add('is-wide');
-        menu.removeAttribute('popover');
+  // Synchronize sidebar popover attribute between desktop (>= 1024px) and mobile drawer (< 1024px)
+  const sidebar = document.getElementById('app-sidebar');
+  if (sidebar) {
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const syncSidebar = () => {
+      if (mq.matches) {
+        sidebar.removeAttribute('popover');
       } else {
-        header.classList.remove('is-wide');
-        menu.setAttribute('popover', 'auto');
-        if (wasOpen && typeof menu.showPopover === 'function') {
-          try { menu.showPopover(); } catch (_) {}
-        }
+        sidebar.setAttribute('popover', 'auto');
       }
-      requestAnimationFrame(() => header.classList.remove('is-measuring'));
     };
-
-    const ro = new ResizeObserver(() => syncNav());
-    ro.observe(header);
-    ro.observe(menu);
-    if (document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(() => { lastWidth = 0; syncNav(); });
-    }
-    syncNav();
+    mq.addEventListener('change', syncSidebar);
+    syncSidebar();
   }
 
   // Sync aria-invalid with CSS :user-invalid (and fallback if unsupported)
