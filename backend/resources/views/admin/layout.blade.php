@@ -1,15 +1,217 @@
-<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>@yield('title', 'Quản trị') · FaceAttendance</title>
-<style>
-:root{font-family:system-ui,-apple-system,'Segoe UI',Arial,sans-serif;color:#1d2b3e;background:#f3f6fb}*{box-sizing:border-box}body{margin:0}a{color:#1858a7;text-decoration:none}a:hover{text-decoration:underline}h1{font-size:1.55rem;margin:0 0 18px}h2{font-size:1.13rem;margin:6px 0 12px}p{line-height:1.5}header{background:#142946;color:#fff;padding:16px 24px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}header strong{font-size:1.12rem}header a{color:#ecf2ff}nav{display:flex;gap:16px;flex-wrap:wrap}main{max-width:1300px;margin:25px auto;padding:0 20px}section,.panel{background:#fff;padding:20px;border:1px solid #e1e8f1;border-radius:12px;margin-bottom:18px;box-shadow:0 2px 12px #102b5310}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px}.stat{background:#eaf2ff;padding:19px;border-radius:12px}.stat b{display:block;font-size:2rem}.muted{color:#607185;font-size:.89rem}.small{font-size:.82rem}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:.91rem}th,td{padding:10px;border-bottom:1px solid #e3e9f2;text-align:left;vertical-align:top}th{background:#f7faff;color:#52657b}input,select,button{font:inherit}input,select{padding:9px 10px;border:1px solid #cbd5e1;border-radius:8px;background:white;min-width:0;max-width:100%}input[type=checkbox]{width:auto}label{display:block;font-weight:550;font-size:.88rem;margin-bottom:5px}.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:10px}.form-grid input,.form-grid select{width:100%}button,.btn{background:#1955aa;color:#fff;border:none;border-radius:8px;padding:9px 14px;cursor:pointer;display:inline-block}button:hover,.btn:hover{background:#123d7b;color:#fff;text-decoration:none}.outline{background:#fff;color:#1955aa;border:1px solid #bdd0e6}.outline:hover{background:#edf4ff;color:#123d7b}.danger{background:#b4232a}.danger:hover{background:#8d1f26}.pill{display:inline-block;padding:4px 8px;border-radius:9px;background:#e8f1fe;font-size:.78rem}.accepted,.complete{color:#087647}.pending_review,.incomplete{color:#9c6010}.rejected,.absent{color:#ba2b32}.alert{padding:12px;border-radius:9px;margin-bottom:14px;background:#e6f6eb;border:1px solid #b8e2c1}.error{background:#fff0ee;border-color:#ffc5c0;color:#9b2222}details{border:1px solid #dde6ef;border-radius:8px;padding:8px;margin:4px 0}summary{cursor:pointer;font-weight:600}form.inline{display:inline-block}footer{text-align:center;padding:20px;color:#8490a0;font-size:.8rem}
-</style></head><body>
-<header><strong>◈ FACE ATTENDANCE <span class="small" style="font-weight:400">/ Quản trị</span></strong>
-@if(auth()->check())<nav>
-<a href="{{ route('admin.dashboard') }}">Tổng quan</a><a href="{{ route('admin.employees.index') }}">Nhân viên</a>
-<a href="{{ route('admin.shifts.index') }}">Ca làm</a><a href="{{ route('admin.attendance.index') }}">Lượt quét</a>
-<a href="{{ route('admin.reports.index') }}">Báo cáo</a><a href="{{ route('admin.devices.index') }}">Thiết bị</a></nav>
-<form method="post" action="{{ route('admin.logout') }}">@csrf<button class="outline" type="submit">Đăng xuất</button></form>@endif</header>
-<main>@if(session('success'))<div class="alert">{{ session('success') }}</div>@endif
-@if($errors->any())<div class="alert error"><strong>Cần kiểm tra:</strong><ul>@foreach($errors->all() as $error)<li>{{ $error }}</li>@endforeach</ul></div>@endif
-@yield('content')</main><footer>FaceAttendance v0.1 · Dữ liệu sinh trắc bảo mật · Thời gian Việt Nam</footer>
-</body></html>
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>@yield('title', 'Quản trị') · TAD Attend</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ asset('css/admin.css') }}?v=20261120">
+</head>
+<body>
+<header class="site-header" id="site-header">
+  <div class="header-inner" id="header-inner">
+    <a class="brand" href="{{ auth()->check() ? route('admin.dashboard') : route('login') }}">
+      <span class="brand-mark"><x-icon name="scan" :size="20" /></span>
+      <span>TAD Attend</span>
+      <span class="brand-sub">Quản trị</span>
+    </a>
+
+    @if(auth()->check())
+    <nav class="site-nav" aria-label="Điều hướng quản trị">
+      <button
+        class="menu-button"
+        type="button"
+        popovertarget="site-menu"
+        popovertargetaction="toggle"
+        aria-controls="site-menu"
+      >
+        <x-icon name="menu" :size="18" />
+        <span>Danh mục</span>
+      </button>
+
+      @php
+        $navItems = [
+          ['route' => 'admin.dashboard',        'match' => 'admin.dashboard',   'label' => 'Tổng quan', 'icon' => 'dashboard'],
+          ['route' => 'admin.employees.index',  'match' => 'admin.employees.*', 'label' => 'Nhân viên', 'icon' => 'users'],
+          ['route' => 'admin.shifts.index',     'match' => 'admin.shifts.*',    'label' => 'Ca làm',    'icon' => 'clock'],
+          ['route' => 'admin.attendance.index', 'match' => 'admin.attendance.*','label' => 'Lượt quét', 'icon' => 'scan'],
+          ['route' => 'admin.reports.index',    'match' => 'admin.reports.*',   'label' => 'Báo cáo',   'icon' => 'chart'],
+          ['route' => 'admin.devices.index',    'match' => 'admin.devices.*',   'label' => 'Thiết bị',  'icon' => 'device'],
+        ];
+      @endphp
+      <ul id="site-menu" class="site-menu" popover="auto">
+        @foreach($navItems as $item)
+          @php($isCurrent = request()->routeIs($item['match']))
+          <li>
+            <a href="{{ route($item['route']) }}" @if($isCurrent) aria-current="page" @endif>
+              <x-icon :name="$item['icon']" :size="16" />
+              <span>{{ $item['label'] }}</span>
+            </a>
+          </li>
+        @endforeach
+      </ul>
+    </nav>
+
+    <div class="header-actions">
+      @php($initials = mb_strtoupper(mb_substr(trim(auth()->user()->name ?: auth()->user()->email), 0, 2)))
+      <span class="user-chip" title="{{ auth()->user()->email }}">
+        <span class="avatar-dot">{{ $initials }}</span>
+        <span>{{ auth()->user()->name ?: 'Admin' }}</span>
+      </span>
+      <form method="post" action="{{ route('admin.logout') }}" style="margin:0">
+        @csrf
+        <button class="btn-outline btn-sm" type="submit" aria-label="Đăng xuất">
+          <x-icon name="logout" :size="15" />
+          <span>Đăng xuất</span>
+        </button>
+      </form>
+    </div>
+    @endif
+  </div>
+</header>
+
+<main class="container">
+  @if(session('success'))
+    <div class="alert" role="status">
+      <x-icon name="check" :size="18" style="flex-shrink:0;margin-top:2px" />
+      <div>{{ session('success') }}</div>
+    </div>
+  @endif
+
+  @if($errors->any())
+    <div class="alert alert--error" role="alert">
+      <x-icon name="alert" :size="18" style="flex-shrink:0;margin-top:2px" />
+      <div>
+        <strong>Vui lòng kiểm tra lại thông tin:</strong>
+        <ul>
+          @foreach($errors->all() as $error)
+            <li>{{ $error }}</li>
+          @endforeach
+        </ul>
+      </div>
+    </div>
+  @endif
+
+  @yield('content')
+</main>
+
+<footer class="site-footer">
+  TAD Attend · Hệ thống chấm công khuôn mặt on-device (SFace 128d) · Múi giờ Việt Nam (UTC+7)
+</footer>
+
+<dialog id="evidence-lightbox" class="lightbox" aria-labelledby="lightbox-title">
+  <div class="lightbox-head">
+    <strong id="lightbox-title">Ảnh minh chứng chấm công</strong>
+    <div style="display:flex;gap:8px;align-items:center">
+      <a id="lightbox-open-tab" class="btn btn-outline btn-sm" href="#" target="_blank" rel="noopener">Mở tab mới</a>
+      <button type="button" class="btn-outline btn-sm" onclick="document.getElementById('evidence-lightbox').close()">Đóng</button>
+    </div>
+  </div>
+  <div class="lightbox-body">
+    <img id="lightbox-img" src="" alt="Ảnh minh chứng chấm công">
+  </div>
+</dialog>
+
+<script>
+(() => {
+  // Conditional Popover polyfill only when native support is absent
+  if (!Object.hasOwn(HTMLElement.prototype, 'popover')) {
+    import('https://unpkg.com/@oddbird/popover-polyfill@latest/dist/popover.min.js').catch(() => {});
+  }
+
+  // Responsive navbar measurement (single semantic nav tree, wide inline vs narrow popover)
+  const header = document.getElementById('site-header');
+  const inner = document.getElementById('header-inner');
+  const menu = document.getElementById('site-menu');
+  if (header && inner && menu) {
+    let lastWidth = 0;
+    const syncNav = () => {
+      const currentWidth = header.clientWidth;
+      const isCurrentlyWide = header.classList.contains('is-wide');
+      if (!isCurrentlyWide && currentWidth <= lastWidth && lastWidth > 0) return;
+      lastWidth = currentWidth;
+
+      const wasOpen = menu.matches(':popover-open') || menu.classList.contains(':popover-open');
+      header.classList.add('is-measuring');
+      menu.removeAttribute('popover');
+      header.classList.add('is-wide');
+
+      const fits = inner.scrollWidth <= inner.clientWidth + 1;
+      if (fits) {
+        header.classList.add('is-wide');
+        menu.removeAttribute('popover');
+      } else {
+        header.classList.remove('is-wide');
+        menu.setAttribute('popover', 'auto');
+        if (wasOpen && typeof menu.showPopover === 'function') {
+          try { menu.showPopover(); } catch (_) {}
+        }
+      }
+      requestAnimationFrame(() => header.classList.remove('is-measuring'));
+    };
+
+    const ro = new ResizeObserver(() => syncNav());
+    ro.observe(header);
+    ro.observe(menu);
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => { lastWidth = 0; syncNav(); });
+    }
+    syncNav();
+  }
+
+  // Sync aria-invalid with CSS :user-invalid (and fallback if unsupported)
+  const supportsUserInvalid = CSS.supports('selector(:user-invalid)');
+  const dirty = new WeakMap();
+  const syncField = (el) => {
+    if (!el || !el.matches || !el.matches('input, select, textarea')) return;
+    if (supportsUserInvalid) {
+      el.setAttribute('aria-invalid', el.matches(':user-invalid') ? 'true' : 'false');
+    } else if (el.checkValidity) {
+      const ok = el.validity.valid;
+      el.classList.toggle('user-invalid-fallback', !ok);
+      el.setAttribute('aria-invalid', ok ? 'false' : 'true');
+    }
+  };
+  document.querySelectorAll('input, select, textarea').forEach((el) => {
+    if (!el.hasAttribute('aria-invalid')) el.setAttribute('aria-invalid', 'false');
+  });
+  document.addEventListener('blur', (e) => {
+    const t = e.target;
+    if (!supportsUserInvalid && t && t.matches && t.matches('input, select, textarea')) {
+      const st = dirty.get(t) || { changed: false };
+      if (st.changed) syncField(t);
+    } else {
+      syncField(t);
+    }
+  }, true);
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!supportsUserInvalid && t) dirty.set(t, { changed: true });
+    if (t && t.getAttribute && t.getAttribute('aria-invalid') === 'true') syncField(t);
+  });
+  document.addEventListener('invalid', (e) => syncField(e.target), true);
+
+  // Evidence photo modal preview
+  const dlg = document.getElementById('evidence-lightbox');
+  const dlgImg = document.getElementById('lightbox-img');
+  const dlgTitle = document.getElementById('lightbox-title');
+  const dlgLink = document.getElementById('lightbox-open-tab');
+  document.addEventListener('click', (e) => {
+    const trigger = e.target.closest('[data-preview-image]');
+    if (!trigger || !dlg || typeof dlg.showModal !== 'function') return;
+    e.preventDefault();
+    const url = trigger.getAttribute('href');
+    dlgImg.src = url;
+    dlgLink.href = url;
+    dlgTitle.textContent = trigger.getAttribute('data-preview-title') || 'Ảnh minh chứng chấm công';
+    dlg.showModal();
+  });
+  if (dlg) {
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close(); });
+  }
+})();
+</script>
+</body>
+</html>
