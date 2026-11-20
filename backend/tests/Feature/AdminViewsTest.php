@@ -50,5 +50,6 @@ class AdminViewsTest extends TestCase
         $this->actingAs($admin)->get('/admin/attendance')->assertOk()->assertSee('Lượt chấm công');
         $this->actingAs($admin)->get('/admin/reports/daily')->assertOk()->assertSee('Báo cáo chấm công');
         $this->actingAs($admin)->get('/admin/devices')->assertOk()->assertSee('Cổng chính');
+        $this->actingAs($admin)->get('/admin/users')->assertOk()->assertSee('Tài khoản Quản trị');
     }
 }

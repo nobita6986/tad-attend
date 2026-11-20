@@ -32,17 +32,20 @@
       </button>
 
       @php
+        $isSystemAdmin = auth()->user()->isSystemAdmin();
         $navItems = [
-          ['route' => 'admin.dashboard',        'match' => 'admin.dashboard',   'label' => 'Tổng quan', 'icon' => 'dashboard'],
-          ['route' => 'admin.employees.index',  'match' => 'admin.employees.*', 'label' => 'Nhân viên', 'icon' => 'users'],
-          ['route' => 'admin.shifts.index',     'match' => 'admin.shifts.*',    'label' => 'Ca làm',    'icon' => 'clock'],
-          ['route' => 'admin.attendance.index', 'match' => 'admin.attendance.*','label' => 'Lượt quét', 'icon' => 'scan'],
-          ['route' => 'admin.reports.index',    'match' => 'admin.reports.*',   'label' => 'Báo cáo',   'icon' => 'chart'],
-          ['route' => 'admin.devices.index',    'match' => 'admin.devices.*',   'label' => 'Thiết bị',  'icon' => 'device'],
+          ['route' => 'admin.dashboard',        'match' => 'admin.dashboard',   'label' => 'Tổng quan', 'icon' => 'dashboard', 'adminOnly' => false],
+          ['route' => 'admin.employees.index',  'match' => 'admin.employees.*', 'label' => 'Nhân viên', 'icon' => 'users',     'adminOnly' => false],
+          ['route' => 'admin.shifts.index',     'match' => 'admin.shifts.*',    'label' => 'Ca làm',    'icon' => 'clock',     'adminOnly' => false],
+          ['route' => 'admin.attendance.index', 'match' => 'admin.attendance.*','label' => 'Lượt quét', 'icon' => 'scan',      'adminOnly' => false],
+          ['route' => 'admin.reports.index',    'match' => 'admin.reports.*',   'label' => 'Báo cáo',   'icon' => 'chart',     'adminOnly' => false],
+          ['route' => 'admin.devices.index',    'match' => 'admin.devices.*',   'label' => 'Thiết bị',  'icon' => 'device',    'adminOnly' => true],
+          ['route' => 'admin.users.index',      'match' => 'admin.users.*',     'label' => 'Tài khoản', 'icon' => 'shield',    'adminOnly' => true],
         ];
       @endphp
       <ul id="site-menu" class="site-menu" popover="auto">
         @foreach($navItems as $item)
+          @continue($item['adminOnly'] && !$isSystemAdmin)
           @php($isCurrent = request()->routeIs($item['match']))
           <li>
             <a href="{{ route($item['route']) }}" @if($isCurrent) aria-current="page" @endif>
@@ -56,9 +59,10 @@
 
     <div class="header-actions">
       @php($initials = mb_strtoupper(mb_substr(trim(auth()->user()->name ?: auth()->user()->email), 0, 2)))
-      <span class="user-chip" title="{{ auth()->user()->email }}">
+      @php($roleTag = auth()->user()->effectiveRole() === 'admin' ? 'Admin' : 'HR')
+      <span class="user-chip" title="{{ auth()->user()->email }} ({{ $roleTag }})">
         <span class="avatar-dot">{{ $initials }}</span>
-        <span>{{ auth()->user()->name ?: 'Admin' }}</span>
+        <span>{{ auth()->user()->name ?: $roleTag }} · {{ $roleTag }}</span>
       </span>
       <form method="post" action="{{ route('admin.logout') }}" style="margin:0">
         @csrf
