@@ -102,6 +102,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private var busyProcessing = false
     @Volatile
     private var lastSampleCaptureMs = 0L
+    @Volatile
+    private var holdFeedbackUntilMs = 0L
 
     private var activeEnrollmentTarget: EnrollmentTarget? = null
     private val enrollmentVectors = mutableListOf<DoubleArray>()
@@ -474,7 +476,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             }
             return
         }
-        if (frame.timestampMs - lastSampleCaptureMs < 700L) {
+        if (frame.timestampMs - lastSampleCaptureMs < 450L) {
             if (!frame.bitmap.isRecycled) frame.bitmap.recycle()
             return
         }
@@ -611,29 +613,38 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             yawDeg = singleFace?.headEulerAngleY,
             rollDeg = singleFace?.headEulerAngleZ,
             faceWidthRatio = widthRatio,
+            leftEyeOpenProb = singleFace?.leftEyeOpenProbability,
+            rightEyeOpenProb = singleFace?.rightEyeOpenProbability,
             nowMs = frame.timestampMs,
         )
 
         if (!update.shouldCapture || singleFace == null) {
             if (!frame.bitmap.isRecycled) frame.bitmap.recycle()
+            val holdingFeedback = frame.timestampMs < holdFeedbackUntilMs
             _ui.update { prev ->
                 val keepSuccessCard = update.stage == LivenessStage.COOLDOWN_WAIT_LEAVE
+                val preserveBanner = (keepSuccessCard && prev.lastReceipt != null) ||
+                    (holdingFeedback && update.stage != LivenessStage.MULTIPLE_FACES)
                 prev.copy(
                     livenessStage = update.stage,
-                    message = if (keepSuccessCard && prev.lastReceipt != null) prev.message else update.prompt,
+                    message = if (preserveBanner) prev.message else update.prompt,
+                    headline = if (update.stage == LivenessStage.WAITING_FOR_FACE && !holdingFeedback) {
+                        prev.deviceInfo?.let { "Chấm công · ${it.name}" } ?: prev.headline
+                    } else {
+                        prev.headline
+                    },
                     lastReceipt = if (update.stage == LivenessStage.WAITING_FOR_FACE) null else prev.lastReceipt,
-                    isError = update.stage == LivenessStage.MULTIPLE_FACES,
+                    isError = if (preserveBanner) prev.isError else update.stage == LivenessStage.MULTIPLE_FACES,
                 )
             }
             return
         }
 
-        liveness.markCaptured()
         busyProcessing = true
         _ui.update {
             it.copy(
                 livenessStage = LivenessStage.READY_TO_CAPTURE,
-                message = "Đang nhận diện khuôn mặt...",
+                message = update.prompt,
                 isError = false,
             )
         }
@@ -664,13 +675,24 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             }
 
             extracted.onFailure { err ->
-                liveness.reset()
-                _ui.update {
-                    it.copy(
-                        headline = "Chưa chụp được khuôn mặt",
-                        message = err.message ?: "Vui lòng nhìn thẳng vào camera và thử lại.",
-                        isError = true,
-                    )
+                val canRetry = liveness.markCaptureAttemptFailed(SystemClock.elapsedRealtime())
+                if (canRetry) {
+                    _ui.update {
+                        it.copy(
+                            livenessStage = LivenessStage.LOOK_STRAIGHT,
+                            message = "Ảnh hơi mờ, giữ nguyên mặt nhìn thẳng (${liveness.currentAttempt()}/${liveness.maxAttempts()})...",
+                            isError = false,
+                        )
+                    }
+                } else {
+                    holdFeedbackUntilMs = SystemClock.elapsedRealtime() + 2_500L
+                    _ui.update {
+                        it.copy(
+                            headline = "Chưa chụp được khuôn mặt",
+                            message = err.message ?: "Vui lòng nhìn thẳng đủ sáng và thử lại.",
+                            isError = true,
+                        )
+                    }
                 }
                 busyProcessing = false
                 return@launch
@@ -679,19 +701,37 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             val faceData = extracted.getOrThrow()
             when (val match = FaceMath.matchRoster(faceData.embedding, roster, info.minScore)) {
                 is MatchOutcome.Uncertain -> {
-                    liveness.reset()
-                    val scoreNote = match.bestScore?.let { String.format(Locale.US, " (score %.2f < %.2f)", it, info.minScore) }.orEmpty()
-                    _ui.update {
-                        it.copy(
-                            headline = "Chưa thể nhận diện",
-                            message = if (roster.isEmpty()) {
-                                "Chưa có nhân viên nào đăng ký khuôn mặt trên hệ thống."
-                            } else {
-                                "Không đủ chắc chắn để ghi công$scoreNote. Hãy thử lại hoặc liên hệ quản trị."
-                            },
-                            lastReceipt = null,
-                            isError = true,
-                        )
+                    val canRetry = if (roster.isEmpty()) {
+                        liveness.reset()
+                        false
+                    } else {
+                        liveness.markCaptureAttemptFailed(SystemClock.elapsedRealtime())
+                    }
+                    if (canRetry) {
+                        _ui.update {
+                            it.copy(
+                                livenessStage = LivenessStage.LOOK_STRAIGHT,
+                                message = "Đang lấy khung hình nét hơn (${liveness.currentAttempt()}/${liveness.maxAttempts()})...",
+                                isError = false,
+                            )
+                        }
+                    } else {
+                        holdFeedbackUntilMs = SystemClock.elapsedRealtime() + 2_500L
+                        val scoreNote = match.bestScore?.let {
+                            String.format(Locale.US, " (score %.2f / ngưỡng %.2f)", it, info.minScore)
+                        }.orEmpty()
+                        _ui.update {
+                            it.copy(
+                                headline = "Chưa thể nhận diện",
+                                message = if (roster.isEmpty()) {
+                                    "Chưa có nhân viên nào đăng ký khuôn mặt trên hệ thống."
+                                } else {
+                                    "Không đủ chắc chắn để ghi công$scoreNote. Thử đứng đủ sáng hoặc đăng ký lại khuôn mặt."
+                                },
+                                lastReceipt = null,
+                                isError = true,
+                            )
+                        }
                     }
                     busyProcessing = false
                 }
@@ -711,6 +751,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             capturedAt = capturedAt,
                         )
                     }.onSuccess { receipt ->
+                        liveness.markPunchCompleted()
+                        holdFeedbackUntilMs = 0L
                         val salutation = when (person.gender) {
                             "female" -> "chị"
                             "male" -> "anh"
@@ -725,6 +767,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         }
                         _ui.update {
                             it.copy(
+                                livenessStage = LivenessStage.COOLDOWN_WAIT_LEAVE,
                                 lastReceipt = receipt,
                                 headline = headlineText,
                                 message = "Xin chào $salutation ${receipt.employeeName}! Ghi nhận lúc $formatted.",
@@ -732,13 +775,19 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             )
                         }
                     }.onFailure { err ->
-                        liveness.reset()
+                        val isCooldown = (err as? vn.tad.attend.data.ApiException)?.statusCode == 409
+                        if (isCooldown) {
+                            liveness.markPunchCompleted()
+                        } else {
+                            liveness.reset()
+                        }
+                        holdFeedbackUntilMs = SystemClock.elapsedRealtime() + 2_500L
                         _ui.update {
                             it.copy(
                                 lastReceipt = null,
-                                headline = "Không ghi được công",
+                                headline = if (isCooldown) "Đã chấm công trước đó" else "Không ghi được công",
                                 message = err.message ?: "Lỗi gửi lượt chấm công.",
-                                isError = true,
+                                isError = !isCooldown,
                             )
                         }
                     }

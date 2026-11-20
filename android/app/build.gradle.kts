@@ -64,8 +64,12 @@ android {
         applicationId = "vn.tad.attend"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.2.20112026"
+        versionCode = 4
+        versionName = "1.0.3.20112026"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
 
         buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://chamcong.tananhduong.com.vn\"")
         buildConfigField("String", "EXPECTED_MODEL_ID", "\"sface\"")

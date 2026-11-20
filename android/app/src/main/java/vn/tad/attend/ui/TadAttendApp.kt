@@ -248,8 +248,9 @@ private fun KioskScreen(
         val frameBorderColor = when {
             ui.lastReceipt?.reviewState == "accepted" -> Color(0xFF087647)
             ui.isError -> MaterialTheme.colorScheme.error
-            ui.livenessStage == LivenessStage.TURN_OPPOSITE_SIDE ||
-                ui.livenessStage == LivenessStage.LOOK_STRAIGHT -> Color(0xFF1955AA)
+            ui.livenessStage == LivenessStage.LOOK_STRAIGHT ||
+                ui.livenessStage == LivenessStage.READY_TO_CAPTURE -> Color(0xFF10B981)
+            ui.livenessStage == LivenessStage.VERIFY_LIVENESS -> Color(0xFF2563EB)
             else -> Color(0xFF94A3B8)
         }
 
@@ -270,8 +271,39 @@ private fun KioskScreen(
                 Box(
                     modifier = Modifier
                         .size(width = 220.dp, height = 280.dp)
-                        .border(2.dp, Color.White.copy(alpha = 0.65f), CircleShape),
+                        .border(2.dp, frameBorderColor.copy(alpha = 0.85f), CircleShape),
                 )
+                if (ui.isConnected) {
+                    val stepPillText = when (ui.livenessStage) {
+                        LivenessStage.LOOK_STRAIGHT, LivenessStage.READY_TO_CAPTURE -> "✓ Đã xác thực · Nhìn thẳng..."
+                        LivenessStage.COOLDOWN_WAIT_LEAVE -> "✓ Đã ghi nhận"
+                        LivenessStage.VERIFY_LIVENESS -> "Bước 1/2: Chớp mắt hoặc quay nhẹ đầu"
+                        LivenessStage.FACE_TOO_SMALL -> "Đưa mặt lại gần hơn"
+                        LivenessStage.MULTIPLE_FACES -> "Chỉ đứng 1 người trong khung"
+                        else -> "Đưa khuôn mặt vào khung"
+                    }
+                    val pillBg = when (ui.livenessStage) {
+                        LivenessStage.LOOK_STRAIGHT, LivenessStage.READY_TO_CAPTURE, LivenessStage.COOLDOWN_WAIT_LEAVE ->
+                            Color(0xFF047857).copy(alpha = 0.88f)
+                        LivenessStage.MULTIPLE_FACES -> Color(0xFFDC2626).copy(alpha = 0.90f)
+                        else -> Color(0xFF0F172A).copy(alpha = 0.72f)
+                    }
+                    Surface(
+                        color = pillBg,
+                        shape = RoundedCornerShape(999.dp),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 12.dp, start = 12.dp, end = 12.dp),
+                    ) {
+                        Text(
+                            text = stepPillText,
+                            color = Color.White,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                        )
+                    }
+                }
             } else {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,

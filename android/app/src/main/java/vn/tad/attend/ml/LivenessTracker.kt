@@ -1,13 +1,14 @@
 package vn.tad.attend.ml
 
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 enum class LivenessStage {
     WAITING_FOR_FACE,
     MULTIPLE_FACES,
     FACE_TOO_SMALL,
-    TURN_FIRST_SIDE,
-    TURN_OPPOSITE_SIDE,
+    VERIFY_LIVENESS,
     LOOK_STRAIGHT,
     READY_TO_CAPTURE,
     COOLDOWN_WAIT_LEAVE,
@@ -17,43 +18,88 @@ data class LivenessUpdate(
     val stage: LivenessStage,
     val prompt: String,
     val shouldCapture: Boolean = false,
+    val livenessVerified: Boolean = false,
 )
 
 /**
- * Interactive head-turn liveness challenge (`mlkit_head_turn`).
- * Orientation-agnostic across front cameras: user turns slightly to one side,
- * then to the opposite side, then looks straight ahead.
+ * Fast, natural liveness challenge (`mlkit_head_turn`):
+ *  - Step 1: Natural blink (open -> closed -> open) OR gentle 1-side head turn (|yaw| >= 9° or yaw span >= 10°).
+ *  - Step 2: Look toward camera (|yaw| <= 14°, |roll| <= 20°) -> captures immediately.
+ *  - Smart retry window: if the first frame is blurry or low-score, retains verified liveness
+ *    for up to [maxCaptureAttempts] attempts within [retryWindowMs] instead of forcing the user to turn again.
  */
 class LivenessTracker(
-    private val turnThresholdDeg: Float = 12f,
-    private val straightThresholdDeg: Float = 9f,
-    private val maxRollDeg: Float = 18f,
-    private val minFaceWidthRatio: Float = 0.16f,
-    private val leaveResetMs: Long = 1_100L,
+    private val turnThresholdDeg: Float = 9f,
+    private val yawSpanThresholdDeg: Float = 10f,
+    private val straightThresholdDeg: Float = 14f,
+    private val maxRollDeg: Float = 20f,
+    private val minFaceWidthRatio: Float = 0.14f,
+    private val leaveResetMs: Long = 900L,
+    private val maxCaptureAttempts: Int = 5,
+    private val retryWindowMs: Long = 3_000L,
+    private val retrySpacingMs: Long = 220L,
 ) {
-    private var firstSideSign: Int = 0 // -1 or +1 once first turn is observed
-    private var sawOppositeSide: Boolean = false
+    private var livenessVerified: Boolean = false
     private var armed: Boolean = true
     private var absentSinceMs: Long? = null
 
+    private var minYawSeen: Float = Float.POSITIVE_INFINITY
+    private var maxYawSeen: Float = Float.NEGATIVE_INFINITY
+    private var sawEyesOpen: Boolean = false
+    private var sawEyesClosed: Boolean = false
+
+    private var verifiedAtMs: Long? = null
+    private var captureAttempts: Int = 0
+    private var lastAttemptFailedMs: Long = 0L
+
     fun reset() {
-        firstSideSign = 0
-        sawOppositeSide = false
+        livenessVerified = false
         armed = true
         absentSinceMs = null
+        minYawSeen = Float.POSITIVE_INFINITY
+        maxYawSeen = Float.NEGATIVE_INFINITY
+        sawEyesOpen = false
+        sawEyesClosed = false
+        verifiedAtMs = null
+        captureAttempts = 0
+        lastAttemptFailedMs = 0L
     }
 
-    fun markCaptured() {
+    /** Called ONLY after attendance is accepted (or server cooldown 409) to prevent immediate re-trigger. */
+    fun markPunchCompleted() {
         armed = false
-        firstSideSign = 0
-        sawOppositeSide = false
+        livenessVerified = false
+        verifiedAtMs = null
+        captureAttempts = 0
     }
+
+    /**
+     * Called when a capture attempt fails (blurry frame, missing landmark, or score below threshold).
+     * Returns true if we still have retry budget without forcing a fresh liveness motion;
+     * returns false when budget is exhausted and state has been reset.
+     */
+    fun markCaptureAttemptFailed(nowMs: Long): Boolean {
+        captureAttempts++
+        lastAttemptFailedMs = nowMs
+        val started = verifiedAtMs ?: nowMs
+        if (captureAttempts >= maxCaptureAttempts || (nowMs - started) >= retryWindowMs) {
+            reset()
+            return false
+        }
+        return true
+    }
+
+    fun currentAttempt(): Int = captureAttempts
+
+    fun maxAttempts(): Int = maxCaptureAttempts
 
     fun onObservation(
         faceCount: Int,
         yawDeg: Float? = null,
         rollDeg: Float? = null,
         faceWidthRatio: Float = 0f,
+        leftEyeOpenProb: Float? = null,
+        rightEyeOpenProb: Float? = null,
         nowMs: Long,
     ): LivenessUpdate {
         if (faceCount == 0) {
@@ -82,8 +128,13 @@ class LivenessTracker(
         absentSinceMs = null
 
         if (faceCount > 1) {
-            firstSideSign = 0
-            sawOppositeSide = false
+            livenessVerified = false
+            minYawSeen = Float.POSITIVE_INFINITY
+            maxYawSeen = Float.NEGATIVE_INFINITY
+            sawEyesOpen = false
+            sawEyesClosed = false
+            verifiedAtMs = null
+            captureAttempts = 0
             return LivenessUpdate(
                 stage = LivenessStage.MULTIPLE_FACES,
                 prompt = "Phát hiện nhiều khuôn mặt. Vui lòng đứng từng người một.",
@@ -101,56 +152,93 @@ class LivenessTracker(
             return LivenessUpdate(
                 stage = LivenessStage.FACE_TOO_SMALL,
                 prompt = "Đưa khuôn mặt lại gần camera hơn.",
+                livenessVerified = livenessVerified,
             )
         }
 
         val yaw = yawDeg ?: return LivenessUpdate(
             stage = LivenessStage.WAITING_FOR_FACE,
-            prompt = "Không đo được góc mặt. Giữ mặt rõ ánh sáng.",
+            prompt = "Không đo được góc mặt. Giữ mặt đủ ánh sáng.",
         )
 
-        if (firstSideSign == 0) {
-            if (abs(yaw) >= turnThresholdDeg) {
-                firstSideSign = if (yaw < 0f) -1 else 1
+        if (!livenessVerified) {
+            minYawSeen = min(minYawSeen, yaw)
+            maxYawSeen = max(maxYawSeen, yaw)
+            val yawSpan = maxYawSeen - minYawSeen
+
+            val eyeAvg = averageEyeOpen(leftEyeOpenProb, rightEyeOpenProb)
+            if (eyeAvg != null) {
+                if (!sawEyesOpen && eyeAvg >= 0.65f) {
+                    sawEyesOpen = true
+                } else if (sawEyesOpen && !sawEyesClosed && eyeAvg <= 0.35f) {
+                    sawEyesClosed = true
+                } else if (sawEyesClosed && eyeAvg >= 0.55f) {
+                    livenessVerified = true
+                    verifiedAtMs = nowMs
+                }
+            }
+
+            if (!livenessVerified && (abs(yaw) >= turnThresholdDeg || yawSpan >= yawSpanThresholdDeg)) {
+                livenessVerified = true
+                verifiedAtMs = nowMs
+            }
+
+            if (!livenessVerified) {
                 return LivenessUpdate(
-                    stage = LivenessStage.TURN_OPPOSITE_SIDE,
-                    prompt = "Tốt lắm! Tiếp tục quay nhẹ sang bên ngược lại.",
+                    stage = LivenessStage.VERIFY_LIVENESS,
+                    prompt = "Chớp mắt nhẹ hoặc quay nhẹ đầu sang một bên.",
+                    livenessVerified = false,
                 )
             }
-            return LivenessUpdate(
-                stage = LivenessStage.TURN_FIRST_SIDE,
-                prompt = "Vui lòng quay nhẹ đầu sang trái hoặc phải.",
-            )
         }
 
-        if (!sawOppositeSide) {
-            val turnedOpposite = (firstSideSign < 0 && yaw >= turnThresholdDeg) ||
-                (firstSideSign > 0 && yaw <= -turnThresholdDeg)
-            if (turnedOpposite) {
-                sawOppositeSide = true
-                return LivenessUpdate(
-                    stage = LivenessStage.LOOK_STRAIGHT,
-                    prompt = "Nhìn thẳng vào camera để chấm công.",
-                )
-            }
+        // Expire stale verified state if user never looked straight within retryWindowMs
+        val started = verifiedAtMs ?: nowMs
+        if (nowMs - started > retryWindowMs + 2_000L) {
+            reset()
             return LivenessUpdate(
-                stage = LivenessStage.TURN_OPPOSITE_SIDE,
-                prompt = "Tiếp tục quay nhẹ sang bên ngược lại.",
+                stage = LivenessStage.VERIFY_LIVENESS,
+                prompt = "Chớp mắt nhẹ hoặc quay nhẹ đầu sang một bên.",
+                livenessVerified = false,
             )
         }
 
         val rollOk = rollDeg == null || abs(rollDeg) <= maxRollDeg
-        if (abs(yaw) <= straightThresholdDeg && rollOk) {
+        val straightOk = abs(yaw) <= straightThresholdDeg && rollOk
+        if (straightOk) {
+            val spacingOk = lastAttemptFailedMs == 0L || (nowMs - lastAttemptFailedMs) >= retrySpacingMs
+            if (spacingOk) {
+                return LivenessUpdate(
+                    stage = LivenessStage.READY_TO_CAPTURE,
+                    prompt = if (captureAttempts == 0) {
+                        "Đang nhận diện khuôn mặt..."
+                    } else {
+                        "Giữ nguyên mặt nhìn thẳng (lần ${captureAttempts + 1}/$maxCaptureAttempts)..."
+                    },
+                    shouldCapture = true,
+                    livenessVerified = true,
+                )
+            }
             return LivenessUpdate(
-                stage = LivenessStage.READY_TO_CAPTURE,
-                prompt = "Đang xác thực khuôn mặt...",
-                shouldCapture = true,
+                stage = LivenessStage.LOOK_STRAIGHT,
+                prompt = "Giữ nguyên mặt nhìn thẳng vào camera...",
+                shouldCapture = false,
+                livenessVerified = true,
             )
         }
 
         return LivenessUpdate(
             stage = LivenessStage.LOOK_STRAIGHT,
-            prompt = "Giữ thẳng khuôn mặt và nhìn vào camera.",
+            prompt = "Tốt lắm! Nhìn thẳng vào camera để chấm công.",
+            shouldCapture = false,
+            livenessVerified = true,
         )
+    }
+
+    private fun averageEyeOpen(left: Float?, right: Float?): Float? = when {
+        left != null && right != null -> (left + right) / 2f
+        left != null -> left
+        right != null -> right
+        else -> null
     }
 }
