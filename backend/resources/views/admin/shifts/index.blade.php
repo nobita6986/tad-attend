@@ -43,7 +43,7 @@
 
 <section class="card">
   <div class="card-head">
-    <h2><x-icon name="clock" :size="18" /> Danh sách ca hiện tại ({{ $shifts->count() }})</h2>
+    <h2><x-icon name="clock" :size="18" /> Danh sách ca hiện tại ({{ $shifts->total() }})</h2>
   </div>
 
   <div tabindex="0" role="region" aria-label="Bảng danh sách ca làm" class="table-wrapper">
@@ -105,5 +105,9 @@
       </tbody>
     </table>
   </div>
+
+  @if($shifts->hasPages())
+    <div class="pagination-wrap">{{ $shifts->links() }}</div>
+  @endif
 </section>
 @endsection

@@ -6,6 +6,7 @@ use App\Models\Employee;
 use App\Services\AttendanceReportService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
+use Illuminate\Pagination\LengthAwarePaginator;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Cell\DataType;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
@@ -15,10 +16,49 @@ class ReportController extends Controller
     public function index(Request $request, AttendanceReportService $service)
     {
         [$from, $to, $employeeId] = $this->filters($request);
-        $rows = $service->dailyRows($from, $to, $employeeId);
-        return view('admin.reports.index', ['rows' => array_slice($rows, 0, 100),
-            'total' => count($rows), 'summary' => $service->summary($rows), 'from' => $from, 'to' => $to,
-            'employees' => Employee::orderBy('code')->get(), 'employeeId' => $employeeId]);
+        $perPage = $this->resolvePerPage($request, 30);
+
+        $allRows = $service->dailyRows($from, $to, $employeeId);
+        $allSummary = $service->summary($allRows);
+
+        $rows = $this->paginateArray($allRows, $perPage, 'page', $request, 'daily-table');
+        $summary = $this->paginateArray($allSummary, 20, 'summary_page', $request, 'summary-table');
+
+        return view('admin.reports.index', [
+            'rows' => $rows,
+            'total' => count($allRows),
+            'summary' => $summary,
+            'from' => $from,
+            'to' => $to,
+            'perPage' => $perPage,
+            'employees' => Employee::orderBy('code')->get(),
+            'employeeId' => $employeeId,
+        ]);
+    }
+
+    private function resolvePerPage(Request $request, int $default = 30): int
+    {
+        $requested = (int) $request->query('per_page', $default);
+        return in_array($requested, [20, 30, 50, 100], true) ? $requested : $default;
+    }
+
+    private function paginateArray(array $items, int $perPage, string $pageName, Request $request, string $fragment): LengthAwarePaginator
+    {
+        $total = count($items);
+        $lastPage = max(1, (int) ceil($total / $perPage));
+        $page = max(1, min((int) $request->query($pageName, 1), $lastPage));
+        $slice = array_slice($items, ($page - 1) * $perPage, $perPage);
+
+        return (new LengthAwarePaginator(
+            $slice,
+            $total,
+            $perPage,
+            $page,
+            [
+                'path' => $request->url(),
+                'pageName' => $pageName,
+            ]
+        ))->withQueryString()->fragment($fragment);
     }
 
     public function exportDetail(Request $request)

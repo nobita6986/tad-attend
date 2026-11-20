@@ -7,7 +7,12 @@ use App\Models\AttendanceEvent;
 use Illuminate\Http\Request;
 class ShiftController extends Controller
 {
-    public function index() { return view('admin.shifts.index', ['shifts' => Shift::orderBy('code')->get()]); }
+    public function index()
+    {
+        return view('admin.shifts.index', [
+            'shifts' => Shift::orderBy('code')->paginate(20)->withQueryString(),
+        ]);
+    }
     public function store(Request $request)
     {
         $data = $this->validated($request, null);

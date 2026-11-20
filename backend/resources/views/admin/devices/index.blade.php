@@ -150,7 +150,7 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
 
 <section class="card">
   <div class="card-head">
-    <h2><x-icon name="device" :size="18" /> Danh sách thiết bị ({{ $devices->count() }})</h2>
+    <h2><x-icon name="device" :size="18" /> Danh sách thiết bị ({{ $devices->total() }})</h2>
   </div>
 
   <div tabindex="0" role="region" aria-label="Bảng danh sách thiết bị" class="table-wrapper">
@@ -231,5 +231,9 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
       </tbody>
     </table>
   </div>
+
+  @if($devices->hasPages())
+    <div class="pagination-wrap">{{ $devices->links() }}</div>
+  @endif
 </section>
 @endsection

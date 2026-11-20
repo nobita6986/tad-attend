@@ -11,10 +11,18 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 class EmployeeController extends Controller
 {
-    public function index()
+    public function index(Request $request)
     {
+        $perPage = (int) $request->query('per_page', 30);
+        if (!in_array($perPage, [20, 30, 50, 100], true)) {
+            $perPage = 30;
+        }
         return view('admin.employees.index', [
-            'employees' => Employee::with(['shift','templates','shiftAssignments.shift'])->orderBy('code')->paginate(30),
+            'employees' => Employee::with(['shift','templates','shiftAssignments.shift'])
+                ->orderBy('code')
+                ->paginate($perPage)
+                ->withQueryString(),
+            'perPage' => $perPage,
             'shifts' => Shift::orderBy('name')->get(),
         ]);
     }

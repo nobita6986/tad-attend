@@ -47,7 +47,7 @@
 
 <section class="card">
   <div class="card-head">
-    <h2><x-icon name="shield" :size="18" /> Danh sách tài khoản ({{ $users->count() }})</h2>
+    <h2><x-icon name="shield" :size="18" /> Danh sách tài khoản ({{ $users->total() }})</h2>
   </div>
 
   <div tabindex="0" role="region" aria-label="Bảng danh sách tài khoản quản trị và HR" class="table-wrapper">
@@ -131,5 +131,9 @@
       </tbody>
     </table>
   </div>
+
+  @if($users->hasPages())
+    <div class="pagination-wrap">{{ $users->links() }}</div>
+  @endif
 </section>
 @endsection
