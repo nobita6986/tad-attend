@@ -19,13 +19,14 @@ class DeviceAdminController extends Controller
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
-            'direction' => ['required', 'in:in,out'],
+            'direction' => ['nullable', 'in:both,in,out'],
         ]);
 
+        $direction = $data['direction'] ?? 'both';
         $token = bin2hex(random_bytes(32));
         $device = Device::create([
             'name' => trim($data['name']),
-            'direction' => $data['direction'],
+            'direction' => $direction,
             'token_hash' => hash('sha256', $token),
             'active' => true,
         ]);
@@ -44,6 +45,32 @@ class DeviceAdminController extends Controller
             'direction' => $device->direction,
             'token' => $token,
         ]);
+    }
+
+    public function update(Request $request, Device $device)
+    {
+        abort_unless($device->active, 422, 'Không thể sửa thiết bị đã thu hồi.');
+
+        $data = $request->validate([
+            'direction' => ['required', 'in:both,in,out'],
+        ]);
+
+        $oldDirection = $device->direction;
+        $device->update(['direction' => $data['direction']]);
+
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'device.updated',
+            'subject_type' => 'device',
+            'subject_id' => $device->id,
+            'details' => [
+                'name' => $device->name,
+                'direction_before' => $oldDirection,
+                'direction_after' => $device->direction,
+            ],
+        ]);
+
+        return back()->with('success', 'Đã cập nhật chế độ chấm công của thiết bị.');
     }
 
     public function revoke(Request $request, Device $device)

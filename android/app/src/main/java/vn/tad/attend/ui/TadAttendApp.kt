@@ -521,7 +521,7 @@ private fun SettingsScreen(
                 val info = ui.deviceInfo
                 if (info != null) {
                     InfoRow("Tên thiết bị", info.name)
-                    InfoRow("Hướng", AttendanceViewModel.directionLabel(info.direction))
+                    InfoRow("Chế độ", AttendanceViewModel.directionLabel(info.direction))
                     InfoRow("Model máy chủ", "${info.modelId} / ${info.modelVersion} (${info.embeddingDimensions}d)")
                     InfoRow("Ngưỡng máy chủ", String.format(Locale.US, "%.3f", info.minScore))
                     InfoRow("Nhân viên trong RAM", "${ui.rosterCount}")

@@ -47,11 +47,12 @@ class AttendanceApiClientTest {
             MockResponse()
                 .setResponseCode(200)
                 .setBody(
-                    """{"device_id":"d-1","name":"Cổng Android","direction":"in","server_time":"2026-11-19T10:00:00Z","model_id":"sface","model_version":"2021dec","embedding_dimensions":128,"min_score":0.42}""",
+                    """{"device_id":"d-1","name":"Cổng Android","direction":"both","server_time":"2026-11-19T10:00:00Z","model_id":"sface","model_version":"2021dec","embedding_dimensions":128,"min_score":0.42}""",
                 ),
         )
         val info = client.getDeviceInfo(baseUrl, "secret-token")
         assertEquals("sface", info.modelId)
+        assertEquals("both", info.direction)
         assertEquals(128, info.embeddingDimensions)
         val deviceReq = server.takeRequest()
         assertEquals("Bearer secret-token", deviceReq.getHeader("Authorization"))

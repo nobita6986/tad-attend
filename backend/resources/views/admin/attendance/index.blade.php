@@ -6,11 +6,12 @@
 <div><label>Trạng thái</label><select name="state"><option value="">Tất cả</option>@foreach(['accepted'=>'Hợp lệ','pending_review'=>'Chờ duyệt','rejected'=>'Từ chối'] as $key=>$label)<option value="{{ $key }}" @selected(request('state')===$key)>{{ $label }}</option>@endforeach</select></div>
 <div style="align-self:end"><button type="submit">Lọc kết quả</button></div>
 </form></section>
-<section><div class="table-scroll"><table><thead><tr><th>Nhân viên</th><th>Thời gian quét</th><th>Thiết bị</th><th>Hướng</th><th>Độ khớp</th><th>Trạng thái</th><th>Ảnh</th><th>Xét duyệt</th></tr></thead><tbody>
+<section><div class="table-scroll"><table><thead><tr><th>Nhân viên</th><th>Thời gian quét</th><th>Thiết bị</th><th>Loại lượt</th><th>Độ khớp</th><th>Trạng thái</th><th>Ảnh</th><th>Xét duyệt</th></tr></thead><tbody>
+@php($dirLabels = ['both' => 'Chấm công', 'in' => 'Vào', 'out' => 'Ra'])
 @forelse($events as $ev)<tr>
 <td><b>{{ $ev->employee->code }}</b><br>{{ $ev->employee->full_name }}</td>
 <td>{{ $ev->captured_at->timezone(config('attendance.timezone'))->format('d/m/Y H:i:s') }}<br><span class="small muted">Nhận: {{ $ev->received_at->timezone(config('attendance.timezone'))->format('H:i:s') }}</span></td>
-<td>{{ $ev->device->name }}</td><td>{{ $ev->direction }}</td><td>{{ number_format($ev->match_score,3) }}</td>
+<td>{{ $ev->device->name }}</td><td>{{ $dirLabels[$ev->direction] ?? $ev->direction }}</td><td>{{ number_format($ev->match_score,3) }}</td>
 <td class="{{ $ev->review_state }}">{{ $ev->review_state }}@if($ev->is_offline)<br><span class="small">Ngoại tuyến</span>@endif</td>
 <td>@if($ev->image_path)<a href="{{ route('admin.attendance.image',$ev) }}" target="_blank" rel="noopener">Xem ảnh</a>@else <span class="muted">Đã xóa</span> @endif</td>
 <td>@if($ev->review_state === 'pending_review')<details><summary>Kiểm tra</summary>

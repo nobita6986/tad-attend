@@ -30,10 +30,11 @@ class ReportController extends Controller
         $events = AttendanceEvent::with(['employee','device'])->where('captured_at', '>=', $start)
             ->where('captured_at', '<', $end)->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId))
             ->orderBy('captured_at')->get();
-        $headers = ['Mã sự kiện','Mã NV','Họ tên','Ngày','Giờ','Hướng','Thiết bị','Trạng thái','Điểm khớp','Ngoại tuyến','Ảnh minh chứng'];
+        $headers = ['Mã sự kiện','Mã NV','Họ tên','Ngày','Giờ','Loại lượt','Thiết bị','Trạng thái','Điểm khớp','Ngoại tuyến','Ảnh minh chứng'];
+        $dirLabels = ['both' => 'Chấm công', 'in' => 'Vào', 'out' => 'Ra'];
         $records = $events->map(fn ($e) => [$e->event_uuid, $e->employee->code, $e->employee->full_name,
             $e->captured_at->setTimezone($tz)->format('d/m/Y'), $e->captured_at->setTimezone($tz)->format('H:i:s'),
-            $e->direction, $e->device->name, $e->review_state, $e->match_score,
+            $dirLabels[$e->direction] ?? $e->direction, $e->device->name, $e->review_state, $e->match_score,
             $e->is_offline ? 'Có' : 'Không', $e->image_path ? 'Có' : 'Đã xóa/chưa có'])->all();
         return $this->download('chi-tiet-cham-cong-'.$from.'-'.$to.'.xlsx', $headers, $records);
     }
