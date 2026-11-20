@@ -1,5 +1,5 @@
 @extends('admin.layout') @section('title','Báo cáo') @section('content')
-<h1>Báo cáo chấm công</h1><p class="muted">Quy tắc v0.1: chỉ tính cặp lượt VÀO/RA đã được duyệt theo ca. Chưa bao gồm phép, ngày lễ, tăng ca và ca xoay. Cần kiểm duyệt trước khi làm lương.</p>
+<h1>Báo cáo chấm công</h1><p class="muted">Tính lượt đầu tiên (Vào) và lượt cuối cùng (Ra) đã duyệt trong khung ca (-4h/+4h). Hỗ trợ cả thiết bị chấm công chung (Vào/Ra) lẫn cổng tách riêng. Chưa bao gồm phép, ngày lễ, tăng ca — HR kiểm duyệt trước khi tính lương.</p>
 <section><form method="get" class="form-grid">
 <div><label>Từ ngày</label><input type="date" name="from" required value="{{ $from }}"></div>
 <div><label>Đến ngày</label><input type="date" name="to" required value="{{ $to }}"></div>

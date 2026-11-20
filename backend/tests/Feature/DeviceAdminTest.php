@@ -51,15 +51,14 @@ class DeviceAdminTest extends TestCase
         $admin = $this->makeAdmin();
 
         $response = $this->actingAs($admin)->post('/admin/devices', [
-            'name' => 'Cổng vào Android 1',
-            'direction' => 'in',
+            'name' => 'Cổng chính Android',
         ]);
 
         $response->assertRedirect('/admin/devices');
         $issued = session('issued_device');
         $this->assertIsArray($issued);
-        $this->assertSame('Cổng vào Android 1', $issued['name']);
-        $this->assertSame('in', $issued['direction']);
+        $this->assertSame('Cổng chính Android', $issued['name']);
+        $this->assertSame('both', $issued['direction']);
         $this->assertSame(64, strlen($issued['token']));
 
         $device = Device::findOrFail($issued['id']);
@@ -71,15 +70,22 @@ class DeviceAdminTest extends TestCase
         $this->assertSame($device->id, $audit->subject_id);
         $this->assertStringNotContainsString($issued['token'], json_encode($audit->details));
 
-        // Plaintext token authenticates the device API and exposes SFace 128-dim config.
+        // Plaintext token authenticates the device API and exposes SFace 128-dim config + both direction.
         $this->withToken($issued['token'])
             ->getJson('/api/v1/device')
             ->assertOk()
             ->assertJsonPath('device_id', $device->id)
-            ->assertJsonPath('direction', 'in')
+            ->assertJsonPath('direction', 'both')
             ->assertJsonPath('model_id', 'sface')
             ->assertJsonPath('model_version', '2021dec')
             ->assertJsonPath('embedding_dimensions', 128);
+
+        // Admin can switch an active device's direction and audit log records the change.
+        $this->actingAs($admin)
+            ->put("/admin/devices/{$device->id}", ['direction' => 'in'])
+            ->assertRedirect();
+        $this->assertSame('in', $device->fresh()->direction);
+        $this->assertDatabaseHas('audit_logs', ['action' => 'device.updated', 'subject_id' => $device->id]);
 
         // Revoking immediately invalidates the bearer token.
         $this->actingAs($admin)

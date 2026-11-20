@@ -7,8 +7,9 @@ use Carbon\CarbonImmutable;
 use Illuminate\Support\Collection;
 
 /**
- * v0.1 rules: explicit IN/OUT punches only, within -4h/+4h shift window.
- * No automatic payroll without manual validation of exceptions.
+ * Shift-window attendance summary (-4h/+4h).
+ * Supports both single shared kiosk devices (`both`: first punch = IN, last punch = OUT)
+ * and dedicated directional gates (`in` / `out`).
  */
 class AttendanceReportService
 {
@@ -23,7 +24,7 @@ class AttendanceReportService
         $employees = Employee::query()->with(['shift', 'shiftAssignments.shift'])
             ->when($employeeId, fn ($q) => $q->whereKey($employeeId))->orderBy('code')->get();
         $punches = AttendanceEvent::query()->where('review_state', 'accepted')
-            ->whereIn('direction', ['in', 'out'])
+            ->whereIn('direction', ['both', 'in', 'out'])
             ->where('captured_at', '>=', $start->subHours(4)->utc())
             ->where('captured_at', '<=', $end->addDays(2)->utc())
             ->when($employeeId, fn ($q) => $q->where('employee_id', $employeeId))
@@ -53,8 +54,8 @@ class AttendanceReportService
                 $windowIn = $scheduledIn->subHours(4)->utc();
                 $windowOut = $scheduledOut->addHours(4)->utc();
                 $events = $employeePunches->filter(fn ($ev) => $ev->captured_at->betweenIncluded($windowIn, $windowOut));
-                $firstIn = $events->first(fn ($ev) => $ev->direction === 'in');
-                $lastOut = $events->reverse()->first(fn ($ev) => $ev->direction === 'out' && (!$firstIn || $ev->captured_at->gt($firstIn->captured_at)));
+                $firstIn = $events->first(fn ($ev) => in_array($ev->direction, ['in', 'both'], true));
+                $lastOut = $events->reverse()->first(fn ($ev) => in_array($ev->direction, ['out', 'both'], true) && (!$firstIn || $ev->captured_at->gt($firstIn->captured_at)));
                 $base['in'] = $firstIn?->captured_at;
                 $base['out'] = $lastOut?->captured_at;
                 $base['punches'] = $events->count();

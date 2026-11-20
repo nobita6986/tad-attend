@@ -593,11 +593,16 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             else -> "anh/chị"
                         }
                         val formatted = formatVnTime(receipt.recordedAt)
-                        val dirText = directionLabel(receipt.direction)
+                        val headlineText = if (receipt.reviewState == "accepted") {
+                            if (receipt.direction == "both") "Chấm công thành công"
+                            else "Chấm công thành công (${directionLabel(receipt.direction)})"
+                        } else {
+                            "Đã ghi nhận — chờ duyệt"
+                        }
                         _ui.update {
                             it.copy(
                                 lastReceipt = receipt,
-                                headline = if (receipt.reviewState == "accepted") "Chấm công thành công ($dirText)" else "Đã ghi nhận — chờ duyệt",
+                                headline = headlineText,
                                 message = "Xin chào $salutation ${receipt.employeeName}! Ghi nhận lúc $formatted.",
                                 isError = false,
                             )
@@ -633,6 +638,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             runCatching { Instant.parse(isoUtc).atZone(VN_ZONE).format(VN_FORMATTER) }.getOrDefault(isoUtc)
 
         fun directionLabel(direction: String): String = when (direction) {
+            "both" -> "Vào / Ra"
             "in" -> "Cổng vào"
             "out" -> "Cổng ra"
             else -> direction
