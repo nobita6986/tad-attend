@@ -7,6 +7,7 @@ use App\Models\Device;
 use App\Models\Employee;
 use App\Models\EnrollmentTicket;
 use App\Models\FaceTemplate;
+use App\Models\Shift;
 use App\Models\AuditLog;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -82,6 +83,124 @@ class DeviceController extends Controller
             return $employee->id;
         });
         return response()->json(['employee_id' => $employeeId, 'enrolled_at' => now('UTC')->toIso8601String()], 201);
+    }
+
+    public function enrollmentOptions(Request $request): JsonResponse
+    {
+        $modelId = (string) config('attendance.model_id');
+        $modelVersion = (string) config('attendance.model_version');
+
+        $shifts = Shift::orderBy('name')->get(['id', 'code', 'name', 'starts_at', 'ends_at']);
+        $employees = Employee::query()
+            ->where('active', true)
+            ->with(['templates' => fn ($q) => $q->where('active', true)->where('model_id', $modelId)->where('model_version', $modelVersion)])
+            ->orderBy('code')
+            ->get();
+
+        return response()->json([
+            'shifts' => $shifts->map(fn ($s) => [
+                'id' => $s->id,
+                'code' => $s->code,
+                'name' => $s->name,
+                'starts_at' => $s->starts_at,
+                'ends_at' => $s->ends_at,
+            ])->values(),
+            'employees' => $employees->map(fn ($e) => [
+                'id' => $e->id,
+                'code' => $e->code,
+                'full_name' => $e->full_name,
+                'department' => $e->department,
+                'shift_id' => $e->shift_id,
+                'has_face' => $e->templates->isNotEmpty(),
+            ])->values(),
+        ]);
+    }
+
+    public function directEnroll(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'mode' => ['required', 'string', 'in:create,existing'],
+            'employee_id' => ['required_if:mode,existing', 'nullable', 'integer', 'exists:employees,id'],
+            'code' => ['required_if:mode,create', 'nullable', 'string', 'max:32'],
+            'full_name' => ['required_if:mode,create', 'nullable', 'string', 'max:160'],
+            'gender' => ['nullable', 'in:male,female,other'],
+            'department' => ['nullable', 'string', 'max:120'],
+            'shift_id' => ['nullable', 'integer', 'exists:shifts,id'],
+            'consent_confirmed' => ['required', 'accepted'],
+            'model_id' => ['required', 'string', 'max:80'],
+            'model_version' => ['required', 'string', 'max:40'],
+            'embedding' => ['required', 'array', 'size:'.config('attendance.embedding_dimensions')],
+            'embedding.*' => ['required', 'numeric', 'between:-1,1'],
+        ]);
+
+        abort_unless($this->isConfiguredModel($data['model_id'], $data['model_version']), 409, 'Mô hình không đúng hoặc chưa cấu hình.');
+        $embedding = array_map('floatval', array_values($data['embedding']));
+        $norm = sqrt(array_sum(array_map(fn ($x) => $x * $x, $embedding)));
+        if (!is_finite($norm) || $norm < 0.98 || $norm > 1.02) {
+            throw ValidationException::withMessages(['embedding' => 'Vector phải chuẩn hóa L2 và có giá trị hữu hạn.']);
+        }
+
+        $nowUtc = now('UTC');
+        $todayVn = CarbonImmutable::now(config('attendance.timezone'))->toDateString();
+        $deviceId = $this->deviceFor($request)->id;
+
+        $employee = DB::transaction(function () use ($data, $embedding, $nowUtc, $todayVn, $deviceId) {
+            if ($data['mode'] === 'create') {
+                $code = strtoupper(trim((string) $data['code']));
+                $fullName = trim((string) $data['full_name']);
+                if ($code === '' || $fullName === '') {
+                    throw ValidationException::withMessages(['code' => 'Cần nhập đầy đủ mã nhân viên và họ tên.']);
+                }
+                if (Employee::where('code', $code)->exists()) {
+                    throw ValidationException::withMessages(['code' => "Mã nhân viên {$code} đã tồn tại trên hệ thống."]);
+                }
+                $employee = Employee::create([
+                    'code' => $code,
+                    'full_name' => $fullName,
+                    'gender' => $data['gender'] ?? null,
+                    'department' => isset($data['department']) && trim((string) $data['department']) !== '' ? trim((string) $data['department']) : null,
+                    'shift_id' => $data['shift_id'] ?? null,
+                    'employed_from' => $todayVn,
+                    'active' => true,
+                    'consent_at' => $nowUtc,
+                    'consent_method' => 'electronic_consent',
+                ]);
+                $auditAction = 'employee.created_and_enrolled_on_device';
+            } else {
+                $employee = Employee::whereKey($data['employee_id'])->lockForUpdate()->firstOrFail();
+                abort_unless($employee->active, 422, 'Nhân viên đang bị tạm khóa.');
+                if (!$employee->consent_at) {
+                    $employee->update(['consent_at' => $nowUtc, 'consent_method' => 'electronic_consent']);
+                }
+                $auditAction = 'face.enrolled_on_device';
+            }
+
+            FaceTemplate::where('employee_id', $employee->id)->update(['active' => false]);
+            FaceTemplate::updateOrCreate(
+                ['employee_id' => $employee->id, 'model_id' => $data['model_id'], 'model_version' => $data['model_version']],
+                ['embedding' => $embedding, 'active' => true, 'enrolled_at' => $nowUtc]
+            );
+
+            AuditLog::create([
+                'action' => $auditAction,
+                'subject_type' => 'employee',
+                'subject_id' => (string) $employee->id,
+                'details' => [
+                    'device_id' => $deviceId,
+                    'employee_code' => $employee->code,
+                    'model_version' => $data['model_version'],
+                ],
+            ]);
+
+            return $employee;
+        });
+
+        return response()->json([
+            'employee_id' => $employee->id,
+            'code' => $employee->code,
+            'full_name' => $employee->full_name,
+            'enrolled_at' => $nowUtc->toIso8601String(),
+        ], 201);
     }
 
     public function attendance(Request $request): JsonResponse

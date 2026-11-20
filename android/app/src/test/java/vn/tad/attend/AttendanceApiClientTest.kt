@@ -82,4 +82,48 @@ class AttendanceApiClientTest {
         assertTrue(Regex("""name="model_id"\r\n(?:[^\r\n]+\r\n)*\r\nsface""").containsMatchIn(bodyText))
         assertTrue(bodyText.contains("filename=\"evidence.jpg\""))
     }
+
+    @Test
+    fun fetchesEnrollmentOptionsAndDirectEnrollsNewEmployee() = runTest {
+        val client = AttendanceApiClient(allowCleartextForTest = true)
+        val baseUrl = server.url("/").toString().trimEnd('/')
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"shifts":[{"id":1,"code":"HC","name":"Hành chính","starts_at":"08:00:00","ends_at":"17:30:00"}],"employees":[{"id":5,"code":"NV005","full_name":"Trần B","department":"IT","shift_id":1,"has_face":false}]}""",
+                ),
+        )
+        val options = client.getEnrollmentOptions(baseUrl, "tok")
+        assertEquals(1, options.shifts.size)
+        assertEquals("NV005", options.employees.first().code)
+        assertEquals("/api/v1/enrollment-options", server.takeRequest().path)
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(201)
+                .setBody("""{"employee_id":9,"code":"NV009","full_name":"Lê C","enrolled_at":"2026-11-20T01:45:00Z"}"""),
+        )
+        val created = client.createAndEnrollEmployee(
+            baseUrl = baseUrl,
+            token = "tok",
+            code = "nv009",
+            fullName = "Lê C",
+            gender = "male",
+            department = "Kho",
+            shiftId = 1,
+            modelId = "sface",
+            modelVersion = "2021dec",
+            embedding = DoubleArray(128) { if (it == 0) 1.0 else 0.0 },
+        )
+        assertEquals(9, created.employeeId)
+        assertEquals("NV009", created.code)
+        val createReq = server.takeRequest()
+        assertEquals("/api/v1/employees/enroll", createReq.path)
+        val jsonBody = createReq.body.readUtf8()
+        assertTrue(jsonBody.contains("\"mode\":\"create\""))
+        assertTrue(jsonBody.contains("\"code\":\"NV009\""))
+        assertTrue(jsonBody.contains("\"consent_confirmed\":true"))
+    }
 }

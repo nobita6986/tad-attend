@@ -23,7 +23,10 @@ import vn.tad.attend.ml.MatchOutcome
 import vn.tad.attend.ml.SFaceEngine
 import vn.tad.attend.model.AttendanceReceipt
 import vn.tad.attend.model.DeviceInfo
+import vn.tad.attend.model.EmployeeOption
 import vn.tad.attend.model.EnrolledPerson
+import vn.tad.attend.model.EnrollmentOptionsResponse
+import vn.tad.attend.model.ShiftOption
 import vn.tad.attend.security.PinHash
 import vn.tad.attend.security.SecureStore
 import java.time.Instant
@@ -34,6 +37,21 @@ import kotlin.math.abs
 
 enum class AppMode { KIOSK, ENROLLMENT }
 
+sealed class EnrollmentTarget {
+    data class CreateNew(
+        val code: String,
+        val fullName: String,
+        val gender: String?,
+        val department: String?,
+        val shiftId: Int?,
+    ) : EnrollmentTarget()
+
+    data class ExistingEmployee(
+        val employeeId: Int,
+        val label: String,
+    ) : EnrollmentTarget()
+}
+
 data class AttendUiState(
     val mode: AppMode = AppMode.KIOSK,
     val isConnected: Boolean = false,
@@ -42,15 +60,19 @@ data class AttendUiState(
     val modelStatus: String = "Đang kiểm tra mô hình SFace...",
     val deviceInfo: DeviceInfo? = null,
     val rosterCount: Int = 0,
+    val availableShifts: List<ShiftOption> = emptyList(),
+    val availableEmployees: List<EmployeeOption> = emptyList(),
     val headline: String = "Chưa kết nối máy chủ",
     val message: String = "Vào mục Cấu hình để nhập URL và token thiết bị.",
     val livenessStage: LivenessStage = LivenessStage.WAITING_FOR_FACE,
     val lastReceipt: AttendanceReceipt? = null,
     val isError: Boolean = false,
-    val enrollmentTicket: String = "",
     val enrollmentSamples: Int = 0,
     val enrollmentRequired: Int = 5,
     val enrollmentActive: Boolean = false,
+    val enrollmentSuccessNonce: Int = 0,
+    val enrollmentStatus: String = "Nhập thông tin nhân viên mới hoặc chọn nhân viên đã có, sau đó chụp 5 mẫu khuôn mặt.",
+    val enrollmentError: Boolean = false,
     val serverUrl: String = BuildConfig.DEFAULT_SERVER_URL,
     val hasToken: Boolean = false,
     val adminPinSet: Boolean = false,
@@ -81,6 +103,7 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     @Volatile
     private var lastSampleCaptureMs = 0L
 
+    private var activeEnrollmentTarget: EnrollmentTarget? = null
     private val enrollmentVectors = mutableListOf<DoubleArray>()
     private var failedPinAttempts = 0
     private var pinBlockedUntilMs = 0L
@@ -184,11 +207,14 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     )
                 }
                 val people = api.getRoster(url, token, info.modelId, info.modelVersion)
-                info to people
-            }.onSuccess { (info, people) ->
+                val options = runCatching { api.getEnrollmentOptions(url, token) }
+                    .getOrDefault(EnrollmentOptionsResponse())
+                Triple(info, people, options)
+            }.onSuccess { (info, people, options) ->
                 roster = people
                 liveness.reset()
                 enrollmentVectors.clear()
+                activeEnrollmentTarget = null
                 _ui.update {
                     it.copy(
                         mode = AppMode.KIOSK,
@@ -196,9 +222,11 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         isConnecting = false,
                         deviceInfo = info,
                         rosterCount = people.size,
+                        availableShifts = options.shifts,
+                        availableEmployees = sortEmployeesForEnrollment(options.employees),
                         headline = "Chấm công · ${info.name}",
                         message = if (people.isEmpty()) {
-                            "Đã kết nối (${directionLabel(info.direction)}). Chưa có nhân viên đăng ký khuôn mặt."
+                            "Đã kết nối (${directionLabel(info.direction)}). Vào tab Đăng ký để thêm nhân viên ngay trên máy."
                         } else {
                             "Đã đồng bộ ${people.size} nhân viên. Đưa khuôn mặt vào khung và quay nhẹ đầu."
                         },
@@ -244,12 +272,18 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         }
         viewModelScope.launch {
             runCatching {
-                api.getRoster(store.getServerUrl(), store.getDeviceToken(), info.modelId, info.modelVersion)
-            }.onSuccess { people ->
+                val url = store.getServerUrl()
+                val token = store.getDeviceToken()
+                val people = api.getRoster(url, token, info.modelId, info.modelVersion)
+                val options = runCatching { api.getEnrollmentOptions(url, token) }.getOrNull()
+                people to options
+            }.onSuccess { (people, options) ->
                 roster = people
-                _ui.update {
-                    it.copy(
+                _ui.update { prev ->
+                    prev.copy(
                         rosterCount = people.size,
+                        availableShifts = options?.shifts ?: prev.availableShifts,
+                        availableEmployees = options?.employees?.let(::sortEmployeesForEnrollment) ?: prev.availableEmployees,
                         message = "Đã làm mới danh sách: ${people.size} nhân viên.",
                         isError = false,
                     )
@@ -307,43 +341,97 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         _ui.update { it.copy(adminUnlocked = false, pinError = null) }
     }
 
-    fun startEnrollment(ticket: String) {
+    fun startCreateAndEnroll(
+        code: String,
+        fullName: String,
+        gender: String?,
+        department: String?,
+        shiftId: Int?,
+        consentConfirmed: Boolean,
+    ) {
         if (!_ui.value.isConnected || engine == null) {
-            _ui.update { it.copy(message = "Cần kết nối máy chủ trước khi đăng ký.", isError = true) }
+            _ui.update { it.copy(enrollmentStatus = "Cần kết nối máy chủ trước khi đăng ký.", enrollmentError = true) }
             return
         }
-        val clean = ticket.trim().uppercase(Locale.US)
-        if (clean.length < 10) {
-            _ui.update { it.copy(message = "Nhập mã đăng ký hợp lệ từ trang quản trị nhân viên.", isError = true) }
+        val cleanCode = code.trim().uppercase(Locale.US)
+        val cleanName = fullName.trim()
+        if (cleanCode.isEmpty() || cleanName.isEmpty()) {
+            _ui.update { it.copy(enrollmentStatus = "Vui lòng nhập đầy đủ Mã nhân viên và Họ tên.", enrollmentError = true) }
             return
         }
+        if (_ui.value.availableEmployees.any { it.code.equals(cleanCode, ignoreCase = true) }) {
+            _ui.update {
+                it.copy(
+                    enrollmentStatus = "Mã nhân viên $cleanCode đã tồn tại. Chuyển sang mục \"Cập nhật NV đã có\" nếu muốn đăng ký lại khuôn mặt.",
+                    enrollmentError = true,
+                )
+            }
+            return
+        }
+        if (!consentConfirmed) {
+            _ui.update { it.copy(enrollmentStatus = "Cần xác nhận nhân viên đồng ý thu thập khuôn mặt.", enrollmentError = true) }
+            return
+        }
+
+        beginEnrollmentCapture(
+            EnrollmentTarget.CreateNew(
+                code = cleanCode,
+                fullName = cleanName,
+                gender = gender,
+                department = department?.trim()?.takeIf { it.isNotEmpty() },
+                shiftId = shiftId,
+            ),
+            "Đang chụp 5 mẫu cho $cleanCode · $cleanName. Nhìn thẳng vào camera...",
+        )
+    }
+
+    fun startExistingEnrollment(employee: EmployeeOption?, consentConfirmed: Boolean) {
+        if (!_ui.value.isConnected || engine == null) {
+            _ui.update { it.copy(enrollmentStatus = "Cần kết nối máy chủ trước khi đăng ký.", enrollmentError = true) }
+            return
+        }
+        if (employee == null) {
+            _ui.update { it.copy(enrollmentStatus = "Vui lòng chọn nhân viên cần đăng ký khuôn mặt.", enrollmentError = true) }
+            return
+        }
+        if (!consentConfirmed) {
+            _ui.update { it.copy(enrollmentStatus = "Cần xác nhận nhân viên đồng ý thu thập khuôn mặt.", enrollmentError = true) }
+            return
+        }
+
+        val label = "${employee.code} · ${employee.fullName}"
+        beginEnrollmentCapture(
+            EnrollmentTarget.ExistingEmployee(employeeId = employee.id, label = label),
+            "Đang chụp 5 mẫu cho $label. Nhìn thẳng vào camera...",
+        )
+    }
+
+    private fun beginEnrollmentCapture(target: EnrollmentTarget, initialStatus: String) {
+        activeEnrollmentTarget = target
         enrollmentVectors.clear()
         lastSampleCaptureMs = 0L
         _ui.update {
             it.copy(
                 mode = AppMode.ENROLLMENT,
-                enrollmentTicket = clean,
                 enrollmentSamples = 0,
                 enrollmentActive = true,
-                headline = "Đang thu mẫu khuôn mặt",
-                message = "Nhìn thẳng, giữ khuôn mặt rõ trong khung. Cần 5 mẫu.",
-                isError = false,
+                enrollmentStatus = initialStatus,
+                enrollmentError = false,
             )
         }
     }
 
     fun cancelEnrollment() {
         enrollmentVectors.clear()
+        activeEnrollmentTarget = null
         liveness.reset()
-        val info = _ui.value.deviceInfo
         _ui.update {
             it.copy(
                 mode = AppMode.KIOSK,
                 enrollmentActive = false,
                 enrollmentSamples = 0,
-                headline = if (info != null) "Chấm công · ${info.name}" else it.headline,
-                message = if (info != null) "Đưa khuôn mặt vào khung và quay nhẹ đầu." else it.message,
-                isError = false,
+                enrollmentStatus = "Đã hủy phiên chụp mẫu.",
+                enrollmentError = false,
             )
         }
     }
@@ -368,8 +456,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             if (!frame.bitmap.isRecycled) frame.bitmap.recycle()
             _ui.update {
                 it.copy(
-                    message = if (faces.isEmpty()) "Đưa khuôn mặt vào khung để thu mẫu." else "Chỉ được có 1 người trong khung khi đăng ký.",
-                    isError = faces.size > 1,
+                    enrollmentStatus = if (faces.isEmpty()) "Đưa khuôn mặt vào khung để thu mẫu." else "Chỉ được có 1 người trong khung khi đăng ký.",
+                    enrollmentError = faces.size > 1,
                 )
             }
             return
@@ -380,8 +468,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             if (!frame.bitmap.isRecycled) frame.bitmap.recycle()
             _ui.update {
                 it.copy(
-                    message = "Giữ khuôn mặt nhìn thẳng và đủ gần camera (${enrollmentVectors.size}/5 mẫu).",
-                    isError = false,
+                    enrollmentStatus = "Giữ khuôn mặt nhìn thẳng và đủ gần camera (${enrollmentVectors.size}/5 mẫu).",
+                    enrollmentError = false,
                 )
             }
             return
@@ -414,7 +502,12 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
             }
 
             result.onFailure { err ->
-                _ui.update { it.copy(message = err.message ?: "Không đọc được đặc trưng khuôn mặt.", isError = true) }
+                _ui.update {
+                    it.copy(
+                        enrollmentStatus = err.message ?: "Không đọc được đặc trưng khuôn mặt.",
+                        enrollmentError = true,
+                    )
+                }
                 busyProcessing = false
             }.onSuccess { extracted ->
                 enrollmentVectors.add(extracted.embedding)
@@ -422,8 +515,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 _ui.update {
                     it.copy(
                         enrollmentSamples = count,
-                        message = if (count < 5) "Đã thu $count/5 mẫu, giữ nguyên mặt..." else "Đã đủ 5/5 mẫu. Đang gửi lên máy chủ...",
-                        isError = false,
+                        enrollmentStatus = if (count < 5) "Đã thu $count/5 mẫu, giữ nguyên mặt..." else "Đã đủ 5/5 mẫu. Đang lưu lên máy chủ...",
+                        enrollmentError = false,
                     )
                 }
                 if (count < 5) {
@@ -432,26 +525,58 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 }
 
                 val info = _ui.value.deviceInfo
-                val ticket = _ui.value.enrollmentTicket
+                val target = activeEnrollmentTarget
                 val averaged = FaceMath.averageAndNormalize(enrollmentVectors.toList())
                 enrollmentVectors.clear()
+                activeEnrollmentTarget = null
 
                 runCatching {
                     requireNotNull(info) { "Mất kết nối thiết bị." }
-                    api.enroll(store.getServerUrl(), store.getDeviceToken(), ticket, info.modelId, info.modelVersion, averaged)
-                    api.getRoster(store.getServerUrl(), store.getDeviceToken(), info.modelId, info.modelVersion)
-                }.onSuccess { updatedRoster ->
+                    requireNotNull(target) { "Thiếu thông tin nhân viên đăng ký." }
+                    val url = store.getServerUrl()
+                    val token = store.getDeviceToken()
+                    val resp = when (target) {
+                        is EnrollmentTarget.CreateNew -> api.createAndEnrollEmployee(
+                            baseUrl = url,
+                            token = token,
+                            code = target.code,
+                            fullName = target.fullName,
+                            gender = target.gender,
+                            department = target.department,
+                            shiftId = target.shiftId,
+                            modelId = info.modelId,
+                            modelVersion = info.modelVersion,
+                            embedding = averaged,
+                        )
+
+                        is EnrollmentTarget.ExistingEmployee -> api.enrollExistingEmployee(
+                            baseUrl = url,
+                            token = token,
+                            employeeId = target.employeeId,
+                            modelId = info.modelId,
+                            modelVersion = info.modelVersion,
+                            embedding = averaged,
+                        )
+                    }
+                    val updatedRoster = api.getRoster(url, token, info.modelId, info.modelVersion)
+                    val updatedOptions = runCatching { api.getEnrollmentOptions(url, token) }.getOrNull()
+                    Triple(resp, updatedRoster, updatedOptions)
+                }.onSuccess { (resp, updatedRoster, updatedOptions) ->
                     roster = updatedRoster
                     liveness.reset()
-                    _ui.update {
-                        it.copy(
+                    _ui.update { prev ->
+                        prev.copy(
                             mode = AppMode.KIOSK,
                             enrollmentActive = false,
                             enrollmentSamples = 0,
-                            enrollmentTicket = "",
+                            enrollmentSuccessNonce = prev.enrollmentSuccessNonce + 1,
                             rosterCount = updatedRoster.size,
-                            headline = "Đăng ký khuôn mặt thành công",
-                            message = "Đã đồng bộ mẫu mới (${updatedRoster.size} nhân viên). Có thể chấm công ngay.",
+                            availableShifts = updatedOptions?.shifts ?: prev.availableShifts,
+                            availableEmployees = updatedOptions?.employees?.let(::sortEmployeesForEnrollment) ?: prev.availableEmployees,
+                            enrollmentStatus = "Đã lưu & đăng ký khuôn mặt cho ${resp.code} · ${resp.fullName}! Có thể chấm công ngay.",
+                            enrollmentError = false,
+                            headline = "Chấm công · ${info?.name.orEmpty()}",
+                            message = "Đã đồng bộ ${updatedRoster.size} nhân viên. Đưa khuôn mặt vào khung và quay nhẹ đầu.",
                             isError = false,
                         )
                     }
@@ -462,9 +587,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             mode = AppMode.KIOSK,
                             enrollmentActive = false,
                             enrollmentSamples = 0,
-                            headline = "Đăng ký thất bại",
-                            message = err.message ?: "Lỗi gửi dữ liệu đăng ký lên máy chủ.",
-                            isError = true,
+                            enrollmentStatus = err.message ?: "Lỗi lưu thông tin nhân viên lên máy chủ.",
+                            enrollmentError = true,
                         )
                     }
                 }
@@ -633,6 +757,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
         private val VN_ZONE: ZoneId = ZoneId.of("Asia/Ho_Chi_Minh")
         private val VN_FORMATTER: DateTimeFormatter =
             DateTimeFormatter.ofPattern("HH:mm:ss 'ngày' dd/MM/yyyy", Locale("vi", "VN"))
+
+        private fun sortEmployeesForEnrollment(list: List<EmployeeOption>): List<EmployeeOption> =
+            list.sortedWith(compareBy<EmployeeOption> { it.hasFace }.thenBy { it.code })
 
         fun formatVnTime(isoUtc: String): String =
             runCatching { Instant.parse(isoUtc).atZone(VN_ZONE).format(VN_FORMATTER) }.getOrDefault(isoUtc)

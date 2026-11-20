@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,11 +36,18 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
@@ -71,6 +79,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import vn.tad.attend.BuildConfig
 import vn.tad.attend.ml.LivenessStage
+import vn.tad.attend.model.EmployeeOption
 import java.util.Locale
 
 private val TadColorScheme = lightColorScheme(
@@ -110,6 +119,9 @@ fun TadAttendApp(viewModel: AttendanceViewModel) {
     LaunchedEffect(selectedTab) {
         if (selectedTab != 1 && ui.enrollmentActive) {
             viewModel.cancelEnrollment()
+        }
+        if (selectedTab == 1 && ui.isConnected) {
+            viewModel.refreshRoster()
         }
     }
 
@@ -160,11 +172,10 @@ fun TadAttendApp(viewModel: AttendanceViewModel) {
                             hasCameraPermission = hasCameraPermission,
                             onRequestCamera = { permissionLauncher.launch(Manifest.permission.CAMERA) },
                             onFrame = viewModel::onCameraFrame,
-                            onStart = viewModel::startEnrollment,
-                            onCancel = {
-                                viewModel.cancelEnrollment()
-                                selectedTab = 0
-                            },
+                            onRefreshOptions = viewModel::refreshRoster,
+                            onStartCreate = viewModel::startCreateAndEnroll,
+                            onStartExisting = viewModel::startExistingEnrollment,
+                            onCancel = viewModel::cancelEnrollment,
                         )
                     } else {
                         AdminPinGateScreen(ui = ui, onSubmit = viewModel::unlockAdmin)
@@ -256,7 +267,6 @@ private fun KioskScreen(
                     modifier = Modifier.fillMaxSize(),
                     onFrame = onFrame,
                 )
-                // Oval face placement guide
                 Box(
                     modifier = Modifier
                         .size(width = 220.dp, height = 280.dp)
@@ -335,16 +345,50 @@ private fun KioskScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun EnrollmentScreen(
     ui: AttendUiState,
     hasCameraPermission: Boolean,
     onRequestCamera: () -> Unit,
     onFrame: (vn.tad.attend.camera.AnalyzedFrame) -> Unit,
-    onStart: (String) -> Unit,
+    onRefreshOptions: () -> Unit,
+    onStartCreate: (String, String, String?, String?, Int?, Boolean) -> Unit,
+    onStartExisting: (EmployeeOption?, Boolean) -> Unit,
     onCancel: () -> Unit,
 ) {
-    var ticketInput by rememberSaveable { mutableStateOf(ui.enrollmentTicket) }
+    var createMode by rememberSaveable { mutableStateOf(true) }
+    var empCode by rememberSaveable { mutableStateOf("") }
+    var fullName by rememberSaveable { mutableStateOf("") }
+    var gender by rememberSaveable { mutableStateOf("male") }
+    var department by rememberSaveable { mutableStateOf("") }
+    var selectedShiftId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var shiftMenuOpen by remember { mutableStateOf(false) }
+
+    var selectedEmployeeId by rememberSaveable { mutableStateOf<Int?>(null) }
+    var employeeMenuOpen by remember { mutableStateOf(false) }
+    var consentChecked by rememberSaveable { mutableStateOf(false) }
+
+    // Default to first shift if there is only one configured on server
+    LaunchedEffect(ui.availableShifts) {
+        if (selectedShiftId == null && ui.availableShifts.size == 1) {
+            selectedShiftId = ui.availableShifts.first().id
+        }
+    }
+
+    // Clear form fields cleanly right after a successful creation/enrollment
+    LaunchedEffect(ui.enrollmentSuccessNonce) {
+        if (ui.enrollmentSuccessNonce > 0) {
+            empCode = ""
+            fullName = ""
+            department = ""
+            consentChecked = false
+            selectedEmployeeId = null
+        }
+    }
+
+    val selectedShift = ui.availableShifts.find { it.id == selectedShiftId }
+    val selectedEmployee = ui.availableEmployees.find { it.id == selectedEmployeeId }
 
     Column(
         modifier = Modifier
@@ -353,44 +397,244 @@ private fun EnrollmentScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Đăng ký khuôn mặt nhân viên", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-        Text(
-            text = "Quản trị tạo mã 10 phút trong mục Nhân viên trên web, nhập vào đây để chụp 5 mẫu khuôn mặt SFace.",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(0xFF52657B),
-        )
-
-        OutlinedTextField(
-            value = ticketInput,
-            onValueChange = { ticketInput = it.uppercase(Locale.US) },
-            label = { Text("Mã đăng ký (hết hạn sau 10 phút)") },
-            singleLine = true,
-            enabled = !ui.enrollmentActive,
-            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+        Row(
             modifier = Modifier.fillMaxWidth(),
-        )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-                onClick = { onStart(ticketInput) },
-                enabled = ui.isConnected && !ui.enrollmentActive && ticketInput.trim().length >= 10,
-            ) {
-                Text("Bắt đầu thu 5 mẫu")
-            }
-            OutlinedButton(onClick = onCancel) {
-                Text("Hủy")
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("Đăng ký nhân viên & khuôn mặt", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onRefreshOptions, enabled = !ui.enrollmentActive) {
+                Icon(Icons.Default.Refresh, contentDescription = "Tải lại danh sách")
             }
         }
 
-        Text(
-            text = "Tiến độ: ${ui.enrollmentSamples}/${ui.enrollmentRequired} mẫu",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        LinearProgressIndicator(
-            progress = { ui.enrollmentSamples.toFloat() / ui.enrollmentRequired.toFloat() },
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = createMode,
+                onClick = { if (!ui.enrollmentActive) createMode = true },
+                label = { Text("Tạo nhân viên mới") },
+            )
+            FilterChip(
+                selected = !createMode,
+                onClick = { if (!ui.enrollmentActive) createMode = false },
+                label = { Text("Cập nhật NV đã có (${ui.availableEmployees.size})") },
+            )
+        }
+
+        if (createMode) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE1E8F1)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedTextField(
+                        value = empCode,
+                        onValueChange = { empCode = it.uppercase(Locale.US) },
+                        label = { Text("Mã nhân viên * (vd: NV001)") },
+                        singleLine = true,
+                        enabled = !ui.enrollmentActive,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = fullName,
+                        onValueChange = { fullName = it },
+                        label = { Text("Họ và tên *") },
+                        singleLine = true,
+                        enabled = !ui.enrollmentActive,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("Giới tính:", style = MaterialTheme.typography.bodySmall, color = Color(0xFF52657B))
+                        listOf("male" to "Nam", "female" to "Nữ", "other" to "Khác").forEach { (key, label) ->
+                            FilterChip(
+                                selected = gender == key,
+                                onClick = { if (!ui.enrollmentActive) gender = key },
+                                label = { Text(label) },
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = department,
+                        onValueChange = { department = it },
+                        label = { Text("Bộ phận (không bắt buộc)") },
+                        singleLine = true,
+                        enabled = !ui.enrollmentActive,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (ui.availableShifts.isNotEmpty()) {
+                        ExposedDropdownMenuBox(
+                            expanded = shiftMenuOpen && !ui.enrollmentActive,
+                            onExpandedChange = { if (!ui.enrollmentActive) shiftMenuOpen = it },
+                        ) {
+                            OutlinedTextField(
+                                value = selectedShift?.let {
+                                    "${it.name} (${it.startsAt.take(5)}–${it.endsAt.take(5)})"
+                                } ?: "Chưa chọn ca làm",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Ca làm mặc định") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = shiftMenuOpen) },
+                                modifier = Modifier
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                    .fillMaxWidth(),
+                            )
+                            ExposedDropdownMenu(
+                                expanded = shiftMenuOpen && !ui.enrollmentActive,
+                                onDismissRequest = { shiftMenuOpen = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Chưa phân ca") },
+                                    onClick = {
+                                        selectedShiftId = null
+                                        shiftMenuOpen = false
+                                    },
+                                )
+                                ui.availableShifts.forEach { sh ->
+                                    DropdownMenuItem(
+                                        text = { Text("${sh.name} (${sh.startsAt.take(5)}–${sh.endsAt.take(5)})") },
+                                        onClick = {
+                                            selectedShiftId = sh.id
+                                            shiftMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, Color(0xFFE1E8F1)),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    if (ui.availableEmployees.isEmpty()) {
+                        Text(
+                            "Chưa có nhân viên nào trên máy chủ. Hãy chuyển sang \"Tạo nhân viên mới\".",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF52657B),
+                        )
+                    } else {
+                        ExposedDropdownMenuBox(
+                            expanded = employeeMenuOpen && !ui.enrollmentActive,
+                            onExpandedChange = { if (!ui.enrollmentActive) employeeMenuOpen = it },
+                        ) {
+                            OutlinedTextField(
+                                value = selectedEmployee?.let {
+                                    "${it.code} · ${it.fullName} (${if (it.hasFace) "Đã có mặt" else "Chưa có mặt"})"
+                                } ?: "Chọn nhân viên...",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Nhân viên cần đăng ký / cập nhật mặt") },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = employeeMenuOpen) },
+                                modifier = Modifier
+                                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                                    .fillMaxWidth(),
+                            )
+                            ExposedDropdownMenu(
+                                expanded = employeeMenuOpen && !ui.enrollmentActive,
+                                onDismissRequest = { employeeMenuOpen = false },
+                            ) {
+                                ui.availableEmployees.forEach { emp ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                "${emp.code} · ${emp.fullName} — ${if (emp.hasFace) "Đã có mặt" else "Chưa có mặt"}",
+                                                color = if (emp.hasFace) Color(0xFF52657B) else Color(0xFF1955AA),
+                                            )
+                                        },
+                                        onClick = {
+                                            selectedEmployeeId = emp.id
+                                            employeeMenuOpen = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = !ui.enrollmentActive) { consentChecked = !consentChecked },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(
+                checked = consentChecked,
+                onCheckedChange = { if (!ui.enrollmentActive) consentChecked = it },
+            )
+            Text(
+                text = "Nhân viên xác nhận đồng ý cung cấp khuôn mặt để chấm công.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF334155),
+            )
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = {
+                    if (createMode) {
+                        onStartCreate(empCode, fullName, gender, department, selectedShiftId, consentChecked)
+                    } else {
+                        onStartExisting(selectedEmployee, consentChecked)
+                    }
+                },
+                enabled = ui.isConnected && !ui.enrollmentActive && consentChecked && (
+                    if (createMode) empCode.isNotBlank() && fullName.isNotBlank() else selectedEmployee != null
+                ),
+            ) {
+                Text(if (createMode) "Chụp 5 mẫu & Lưu NV" else "Chụp 5 mẫu & Cập nhật")
+            }
+            if (ui.enrollmentActive) {
+                OutlinedButton(onClick = onCancel) {
+                    Text("Hủy chụp")
+                }
+            }
+        }
+
+        if (ui.enrollmentActive || ui.enrollmentSamples > 0) {
+            Text(
+                text = "Tiến độ: ${ui.enrollmentSamples}/${ui.enrollmentRequired} mẫu",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            LinearProgressIndicator(
+                progress = { ui.enrollmentSamples.toFloat() / ui.enrollmentRequired.toFloat() },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = if (ui.enrollmentError) Color(0xFFFFF0EE) else Color(0xFFE8F1FE),
             modifier = Modifier.fillMaxWidth(),
-        )
+        ) {
+            Text(
+                text = ui.enrollmentStatus,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (ui.enrollmentError) Color(0xFF9B2222) else Color(0xFF142946),
+            )
+        }
 
         Box(
             modifier = Modifier
@@ -402,22 +646,18 @@ private fun EnrollmentScreen(
         ) {
             if (hasCameraPermission) {
                 CameraPreviewView(modifier = Modifier.fillMaxSize(), onFrame = onFrame)
+                Box(
+                    modifier = Modifier
+                        .size(width = 180.dp, height = 220.dp)
+                        .border(
+                            2.dp,
+                            if (ui.enrollmentActive) Color(0xFF22C55E) else Color.White.copy(alpha = 0.55f),
+                            CircleShape,
+                        ),
+                )
             } else {
                 Button(onClick = onRequestCamera) { Text("Cấp quyền Camera") }
             }
-        }
-
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = if (ui.isError) Color(0xFFFFF0EE) else Color(0xFFE8F1FE),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = ui.message,
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (ui.isError) Color(0xFF9B2222) else Color(0xFF142946),
-            )
         }
     }
 }
@@ -583,9 +823,9 @@ private fun AdminPinGateScreen(
                 )
                 Text(
                     text = if (ui.adminPinSet) {
-                        "Nhập mã PIN quản trị để truy cập Đăng ký khuôn mặt và Cấu hình."
+                        "Nhập mã PIN quản trị để truy cập Đăng ký nhân viên và Cấu hình."
                     } else {
-                        "Đặt mã PIN tối thiểu 6 ký tự để bảo vệ màn hình cấu hình và đăng ký trên máy chấm công."
+                        "Đặt mã PIN tối thiểu 6 ký tự để bảo vệ màn hình đăng ký và cấu hình trên máy chấm công."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF52657B),

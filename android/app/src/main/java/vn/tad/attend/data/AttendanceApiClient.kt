@@ -14,7 +14,9 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import vn.tad.attend.model.ApiErrorBody
 import vn.tad.attend.model.AttendanceReceipt
 import vn.tad.attend.model.DeviceInfo
+import vn.tad.attend.model.DirectEnrollResponse
 import vn.tad.attend.model.EnrolledPerson
+import vn.tad.attend.model.EnrollmentOptionsResponse
 import vn.tad.attend.model.EnrollmentResponse
 import vn.tad.attend.model.RosterResponse
 import java.io.IOException
@@ -33,6 +35,30 @@ private data class EnrollmentPayload(
     val embedding: List<Double>,
 )
 
+@Serializable
+private data class DirectCreateEnrollPayload(
+    val mode: String = "create",
+    val code: String,
+    val full_name: String,
+    val gender: String? = null,
+    val department: String? = null,
+    val shift_id: Int? = null,
+    val consent_confirmed: Boolean = true,
+    val model_id: String,
+    val model_version: String,
+    val embedding: List<Double>,
+)
+
+@Serializable
+private data class DirectExistingEnrollPayload(
+    val mode: String = "existing",
+    val employee_id: Int,
+    val consent_confirmed: Boolean = true,
+    val model_id: String,
+    val model_version: String,
+    val embedding: List<Double>,
+)
+
 class AttendanceApiClient(
     private val httpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -44,6 +70,7 @@ class AttendanceApiClient(
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+        encodeDefaults = true
     }
 
     private fun buildUrl(baseUrl: String, path: String, query: Map<String, String> = emptyMap()): okhttp3.HttpUrl {
@@ -101,6 +128,77 @@ class AttendanceApiClient(
             .get()
             .build()
         return executeJson<RosterResponse>(req).employees
+    }
+
+    suspend fun getEnrollmentOptions(
+        baseUrl: String,
+        token: String?,
+    ): EnrollmentOptionsResponse {
+        val req = Request.Builder()
+            .url(buildUrl(baseUrl, "enrollment-options"))
+            .header("Authorization", "Bearer ${requireToken(token)}")
+            .header("Accept", "application/json")
+            .get()
+            .build()
+        return executeJson(req)
+    }
+
+    suspend fun createAndEnrollEmployee(
+        baseUrl: String,
+        token: String?,
+        code: String,
+        fullName: String,
+        gender: String?,
+        department: String?,
+        shiftId: Int?,
+        modelId: String,
+        modelVersion: String,
+        embedding: DoubleArray,
+    ): DirectEnrollResponse {
+        val payload = DirectCreateEnrollPayload(
+            code = code.trim().uppercase(Locale.US),
+            full_name = fullName.trim(),
+            gender = gender?.takeIf { it.isNotBlank() },
+            department = department?.trim()?.takeIf { it.isNotEmpty() },
+            shift_id = shiftId,
+            consent_confirmed = true,
+            model_id = modelId,
+            model_version = modelVersion,
+            embedding = embedding.toList(),
+        )
+        val body = json.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder()
+            .url(buildUrl(baseUrl, "employees/enroll"))
+            .header("Authorization", "Bearer ${requireToken(token)}")
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+        return executeJson(req)
+    }
+
+    suspend fun enrollExistingEmployee(
+        baseUrl: String,
+        token: String?,
+        employeeId: Int,
+        modelId: String,
+        modelVersion: String,
+        embedding: DoubleArray,
+    ): DirectEnrollResponse {
+        val payload = DirectExistingEnrollPayload(
+            employee_id = employeeId,
+            consent_confirmed = true,
+            model_id = modelId,
+            model_version = modelVersion,
+            embedding = embedding.toList(),
+        )
+        val body = json.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder()
+            .url(buildUrl(baseUrl, "employees/enroll"))
+            .header("Authorization", "Bearer ${requireToken(token)}")
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+        return executeJson(req)
     }
 
     suspend fun enroll(

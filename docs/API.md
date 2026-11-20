@@ -8,6 +8,13 @@ Response: `{ "device_id":"uuid", "name":"Cổng 1", "direction":"in", "server_ti
 ## GET /roster?model_id=...&model_version=...
 Response: `{ "employees": [{"id":1,"code":"NV001","full_name":"Nguyễn Văn A","gender":"male","template":[0.1,...]}] }`. Chỉ người active + có consent + template đúng model. Template là dữ liệu nhạy cảm: không cache ngoài RAM trong iOS.
 
+## GET /enrollment-options
+Response: `{ "shifts": [{"id":1,"code":"HC","name":"Hành chính","starts_at":"08:00:00","ends_at":"17:30:00"}], "employees": [{"id":1,"code":"NV001","full_name":"Nguyễn Văn A","department":"...","shift_id":1,"has_face":true}] }`.
+
+## POST /employees/enroll (application/json)
+Tạo nhân viên mới (`mode: "create"`) hoặc cập nhật khuôn mặt cho nhân viên đã có (`mode: "existing"`) trực tiếp từ thiết bị đã được cấp token + mở khóa PIN quản trị (không cần mã 10 phút). Yêu cầu `consent_confirmed: true` và vector chuẩn hóa L2 đúng số chiều cấu hình.
+Response: `{ "employee_id":1, "code":"NV001", "full_name":"Nguyễn Văn A", "enrolled_at":"..." }` (201).
+
 ## POST /enrollments (application/json)
 Body: `{ "ticket":"...", "model_id":"your-face-model", "model_version":"1", "embedding":[...]} `.
 Vector phải là JSON floats (512 phần tử trong cấu hình mặc định), L2 norm xấp xỉ 1. Ticket do web admin sinh, một lần và hết hạn 10 phút.

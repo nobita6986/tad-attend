@@ -162,4 +162,92 @@ class DeviceAttendanceTest extends TestCase
             'image' => UploadedFile::fake()->image('face.jpg', 400, 400),
         ])->assertStatus(409);
     }
+
+    public function test_device_can_create_and_enroll_employee_directly_without_ticket(): void
+    {
+        config()->set('attendance.model_id', 'sface');
+        config()->set('attendance.model_version', '2021dec');
+        config()->set('attendance.embedding_dimensions', 128);
+        config()->set('attendance.min_score', 0.42);
+
+        $shift = \App\Models\Shift::create([
+            'code' => 'HC', 'name' => 'Hành chính', 'starts_at' => '08:00:00', 'ends_at' => '17:30:00',
+            'grace_minutes' => 5, 'break_minutes' => 90, 'weekdays' => [1,2,3,4,5,6],
+        ]);
+        $deviceToken = bin2hex(random_bytes(32));
+        Device::create([
+            'name' => 'Cổng chính',
+            'direction' => 'both',
+            'token_hash' => hash('sha256', $deviceToken),
+        ]);
+
+        // Device fetches available shifts and active employees.
+        $this->withToken($deviceToken)
+            ->getJson('/api/v1/enrollment-options')
+            ->assertOk()
+            ->assertJsonCount(1, 'shifts')
+            ->assertJsonPath('shifts.0.code', 'HC');
+
+        $vec128 = array_fill(0, 128, 0.0);
+        $vec128[0] = 1.0;
+
+        // Consent must be confirmed.
+        $this->withToken($deviceToken)->postJson('/api/v1/employees/enroll', [
+            'mode' => 'create',
+            'code' => 'NV900',
+            'full_name' => 'Lê Văn C',
+            'consent_confirmed' => false,
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'embedding' => $vec128,
+        ])->assertUnprocessable();
+
+        // Create employee + enroll face in 1 atomic call.
+        $created = $this->withToken($deviceToken)->postJson('/api/v1/employees/enroll', [
+            'mode' => 'create',
+            'code' => 'nv900',
+            'full_name' => 'Lê Văn C',
+            'gender' => 'male',
+            'department' => 'Kho vận',
+            'shift_id' => $shift->id,
+            'consent_confirmed' => true,
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'embedding' => $vec128,
+        ])->assertCreated()
+            ->assertJsonPath('code', 'NV900')
+            ->assertJsonPath('full_name', 'Lê Văn C');
+
+        $employeeId = $created->json('employee_id');
+
+        // Duplicate code rejected.
+        $this->withToken($deviceToken)->postJson('/api/v1/employees/enroll', [
+            'mode' => 'create',
+            'code' => 'NV900',
+            'full_name' => 'Trùng mã',
+            'consent_confirmed' => true,
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'embedding' => $vec128,
+        ])->assertUnprocessable();
+
+        // Roster immediately includes the newly created employee.
+        $this->withToken($deviceToken)
+            ->getJson('/api/v1/roster?model_id=sface&model_version=2021dec')
+            ->assertOk()
+            ->assertJsonCount(1, 'employees')
+            ->assertJsonPath('employees.0.code', 'NV900');
+
+        // Re-enroll existing employee directly without ticket.
+        $vec128Updated = array_fill(0, 128, 0.0);
+        $vec128Updated[1] = 1.0;
+        $this->withToken($deviceToken)->postJson('/api/v1/employees/enroll', [
+            'mode' => 'existing',
+            'employee_id' => $employeeId,
+            'consent_confirmed' => true,
+            'model_id' => 'sface',
+            'model_version' => '2021dec',
+            'embedding' => $vec128Updated,
+        ])->assertCreated()->assertJsonPath('employee_id', $employeeId);
+    }
 }

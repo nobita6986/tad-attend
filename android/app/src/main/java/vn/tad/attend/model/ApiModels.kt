@@ -30,8 +30,41 @@ data class RosterResponse(
 )
 
 @Serializable
+data class ShiftOption(
+    val id: Int,
+    val code: String,
+    val name: String,
+    @SerialName("starts_at") val startsAt: String,
+    @SerialName("ends_at") val endsAt: String,
+)
+
+@Serializable
+data class EmployeeOption(
+    val id: Int,
+    val code: String,
+    @SerialName("full_name") val fullName: String,
+    val department: String? = null,
+    @SerialName("shift_id") val shiftId: Int? = null,
+    @SerialName("has_face") val hasFace: Boolean = false,
+)
+
+@Serializable
+data class EnrollmentOptionsResponse(
+    val shifts: List<ShiftOption> = emptyList(),
+    val employees: List<EmployeeOption> = emptyList(),
+)
+
+@Serializable
 data class EnrollmentResponse(
     @SerialName("employee_id") val employeeId: Int,
+    @SerialName("enrolled_at") val enrolledAt: String,
+)
+
+@Serializable
+data class DirectEnrollResponse(
+    @SerialName("employee_id") val employeeId: Int,
+    val code: String,
+    @SerialName("full_name") val fullName: String,
     @SerialName("enrolled_at") val enrolledAt: String,
 )
 
