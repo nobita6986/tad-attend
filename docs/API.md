@@ -1,8 +1,12 @@
 # REST API v1 — HTTPS + Bearer device token
 Base URL: `https://YOUR_DOMAIN/api/v1`. JSON trừ API upload multipart. Lỗi theo JSON HTTP 4xx/5xx. Token mỗi thiết bị.
 
+## POST /devices/activate (public, rate-limited 20/min)
+Body: `{ "hardware_id": "AND-XXXX-XXXX-XXXX-XXXX" }`.
+Nếu máy đã được Admin gắn `hardware_id` và đang `active`, backend tự xoay mới Bearer token và trả về `{ "token": "...", "device_id": "uuid", "name": "...", "direction": "both", "hardware_id": "AND-..." }` để app tự kết nối lại sau khi nâng cấp hoặc cài lại mà không cần dán token thủ công. Trả về 404 nếu `hardware_id` chưa đăng ký, 403 nếu thiết bị đang bị khóa.
+
 ## GET /device
-Response: `{ "device_id":"uuid", "name":"Cổng 1", "direction":"in", "server_time":"2026-11-08T00:00:00Z", "min_score":0.42, "model_id":"sface", "model_version":"2021dec", "embedding_dimensions":128 }`.
+Response: `{ "device_id":"uuid", "name":"Cổng 1", "hardware_id":"AND-XXXX-XXXX-XXXX-XXXX", "direction":"both", "server_time":"2026-11-08T00:00:00Z", "min_score":0.42, "model_id":"sface", "model_version":"2021dec", "embedding_dimensions":128 }`.
 `min_score` chỉ là cấu hình kỹ thuật **không phải** ngưỡng dùng thực tế nếu chưa hiệu chuẩn.
 
 ## GET /roster?model_id=...&model_version=...

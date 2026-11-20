@@ -7,6 +7,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.mlkit.vision.face.Face
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import vn.tad.attend.BuildConfig
 import vn.tad.attend.camera.AnalyzedFrame
+import vn.tad.attend.data.ApiException
 import vn.tad.attend.data.AttendanceApiClient
 import vn.tad.attend.ml.FaceMath
 import vn.tad.attend.ml.LivenessStage
@@ -27,6 +30,7 @@ import vn.tad.attend.model.EmployeeOption
 import vn.tad.attend.model.EnrolledPerson
 import vn.tad.attend.model.EnrollmentOptionsResponse
 import vn.tad.attend.model.ShiftOption
+import vn.tad.attend.security.DeviceIdentity
 import vn.tad.attend.security.PinHash
 import vn.tad.attend.security.SecureStore
 import java.time.Instant
@@ -73,6 +77,7 @@ data class AttendUiState(
     val enrollmentSuccessNonce: Int = 0,
     val enrollmentStatus: String = "Nhập thông tin nhân viên mới hoặc chọn nhân viên đã có, sau đó chụp 5 mẫu khuôn mặt.",
     val enrollmentError: Boolean = false,
+    val hardwareId: String = "",
     val serverUrl: String = BuildConfig.DEFAULT_SERVER_URL,
     val hasToken: Boolean = false,
     val adminPinSet: Boolean = false,
@@ -82,11 +87,13 @@ data class AttendUiState(
 
 class AttendanceViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SecureStore(application)
+    private val hardwareId: String = DeviceIdentity.getHardwareId(application)
     private val api = AttendanceApiClient()
     private val liveness = LivenessTracker()
 
     private val _ui = MutableStateFlow(
         AttendUiState(
+            hardwareId = hardwareId,
             serverUrl = store.getServerUrl(),
             hasToken = store.hasDeviceToken(),
             adminPinSet = store.hasAdminPin(),
@@ -104,6 +111,8 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
     private var lastSampleCaptureMs = 0L
     @Volatile
     private var holdFeedbackUntilMs = 0L
+
+    private var autoResetJob: Job? = null
 
     private var activeEnrollmentTarget: EnrollmentTarget? = null
     private val enrollmentVectors = mutableListOf<DoubleArray>()
@@ -128,17 +137,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     modelStatus = "SFace ${BuildConfig.EXPECTED_MODEL_VERSION} (${sface.dimensions()} chiều) — Sẵn sàng",
                 )
             }
-            if (store.hasDeviceToken()) {
-                connect()
-            } else {
-                _ui.update {
-                    it.copy(
-                        headline = "Chưa cấu hình thiết bị",
-                        message = "Mở mục Cấu hình, dán token thiết bị tạo từ /admin/devices để kết nối.",
-                        isError = false,
-                    )
-                }
-            }
+            // Always attempt connect: if no token is cached yet (fresh install/reinstall),
+            // connect() automatically activates using the device's fixed Hardware ID.
+            connect()
         }.onFailure { err ->
             engine = null
             _ui.update {
@@ -168,31 +169,39 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 return@launch
             }
             val url = store.getServerUrl()
-            val token = store.getDeviceToken()
-            if (token.isNullOrBlank()) {
-                _ui.update {
-                    it.copy(
-                        isConnected = false,
-                        isConnecting = false,
-                        headline = "Chưa có token thiết bị",
-                        message = "Vào Cấu hình để nhập token thiết bị đã cấp từ máy chủ.",
-                        isError = true,
-                    )
-                }
-                return@launch
-            }
-
             _ui.update {
                 it.copy(
                     isConnecting = true,
                     headline = "Đang kết nối...",
-                    message = "Đồng bộ cấu hình và danh sách nhân viên từ $url",
+                    message = "Xác thực thiết bị ($hardwareId) và đồng bộ từ $url",
                     isError = false,
                 )
             }
 
             runCatching {
-                val info = api.getDeviceInfo(url, token)
+                var token = store.getDeviceToken()
+                val info = if (token.isNullOrBlank()) {
+                    val activated = api.activateByHardwareId(url, hardwareId)
+                    store.setDeviceToken(activated.token)
+                    token = activated.token
+                    _ui.update { it.copy(hasToken = true) }
+                    api.getDeviceInfo(url, token)
+                } else {
+                    try {
+                        api.getDeviceInfo(url, token)
+                    } catch (e: ApiException) {
+                        if (e.statusCode == 401) {
+                            // Saved token expired/rotated -> auto re-activate via fixed Hardware ID.
+                            val activated = api.activateByHardwareId(url, hardwareId)
+                            store.setDeviceToken(activated.token)
+                            token = activated.token
+                            _ui.update { it.copy(hasToken = true) }
+                            api.getDeviceInfo(url, token)
+                        } else {
+                            throw e
+                        }
+                    }
+                }
                 if (info.modelId == "UNCONFIGURED" || info.modelVersion == "UNCONFIGURED") {
                     throw IllegalStateException("Máy chủ chưa cấu hình mô hình nhận diện.")
                 }
@@ -214,7 +223,9 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 Triple(info, people, options)
             }.onSuccess { (info, people, options) ->
                 roster = people
+                autoResetJob?.cancel()
                 liveness.reset()
+                holdFeedbackUntilMs = 0L
                 enrollmentVectors.clear()
                 activeEnrollmentTarget = null
                 _ui.update {
@@ -230,9 +241,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         message = if (people.isEmpty()) {
                             "Đã kết nối (${directionLabel(info.direction)}). Vào tab Đăng ký để thêm nhân viên ngay trên máy."
                         } else {
-                            "Đã đồng bộ ${people.size} nhân viên. Đưa khuôn mặt vào khung và quay nhẹ đầu."
+                            "Đã đồng bộ ${people.size} nhân viên. Đưa khuôn mặt vào khung và chớp mắt / quay nhẹ đầu."
                         },
                         lastReceipt = null,
+                        livenessStage = LivenessStage.WAITING_FOR_FACE,
                         isError = false,
                         enrollmentActive = false,
                         enrollmentSamples = 0,
@@ -243,8 +255,40 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                     it.copy(
                         isConnected = false,
                         isConnecting = false,
-                        headline = "Không thể kết nối máy chủ",
-                        message = err.message ?: "Kiểm tra lại mạng, URL HTTPS và token thiết bị.",
+                        headline = "Thiết bị chưa kích hoạt hoặc mất mạng",
+                        message = err.message ?: "Kiểm tra lại mạng, URL HTTPS hoặc đăng ký Mã máy trên /admin/devices.",
+                        isError = true,
+                    )
+                }
+            }
+        }
+    }
+
+    fun activateByHardwareIdNow(serverUrl: String) {
+        store.setServerUrl(serverUrl.trim().trimEnd('/'))
+        _ui.update { it.copy(serverUrl = store.getServerUrl()) }
+        viewModelScope.launch {
+            _ui.update {
+                it.copy(
+                    isConnecting = true,
+                    headline = "Đang kích hoạt theo Mã máy...",
+                    message = "Gửi Mã máy $hardwareId lên ${store.getServerUrl()}",
+                    isError = false,
+                )
+            }
+            runCatching {
+                val activated = api.activateByHardwareId(store.getServerUrl(), hardwareId)
+                store.setDeviceToken(activated.token)
+            }.onSuccess {
+                _ui.update { it.copy(hasToken = true) }
+                connect()
+            }.onFailure { err ->
+                _ui.update {
+                    it.copy(
+                        isConnected = false,
+                        isConnecting = false,
+                        headline = "Chưa kích hoạt được thiết bị",
+                        message = err.message ?: "Hãy thêm Mã máy $hardwareId tại mục Thiết bị trên web quản trị.",
                         isError = true,
                     )
                 }
@@ -281,12 +325,18 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                 people to options
             }.onSuccess { (people, options) ->
                 roster = people
+                autoResetJob?.cancel()
+                liveness.reset()
+                holdFeedbackUntilMs = 0L
                 _ui.update { prev ->
                     prev.copy(
                         rosterCount = people.size,
                         availableShifts = options?.shifts ?: prev.availableShifts,
                         availableEmployees = options?.employees?.let(::sortEmployeesForEnrollment) ?: prev.availableEmployees,
-                        message = "Đã làm mới danh sách: ${people.size} nhân viên.",
+                        lastReceipt = null,
+                        livenessStage = LivenessStage.WAITING_FOR_FACE,
+                        headline = prev.deviceInfo?.let { "Chấm công · ${it.name}" } ?: prev.headline,
+                        message = "Đã làm mới danh sách (${people.size} nhân viên). Sẵn sàng chấm công.",
                         isError = false,
                     )
                 }
@@ -620,20 +670,26 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
 
         if (!update.shouldCapture || singleFace == null) {
             if (!frame.bitmap.isRecycled) frame.bitmap.recycle()
+            if (update.autoResetJustTriggered) {
+                autoResetJob?.cancel()
+                holdFeedbackUntilMs = 0L
+            }
             val holdingFeedback = frame.timestampMs < holdFeedbackUntilMs
             _ui.update { prev ->
                 val keepSuccessCard = update.stage == LivenessStage.COOLDOWN_WAIT_LEAVE
                 val preserveBanner = (keepSuccessCard && prev.lastReceipt != null) ||
                     (holdingFeedback && update.stage != LivenessStage.MULTIPLE_FACES)
+                val shouldResetHeader = update.autoResetJustTriggered ||
+                    (update.stage == LivenessStage.WAITING_FOR_FACE && !holdingFeedback)
                 prev.copy(
                     livenessStage = update.stage,
                     message = if (preserveBanner) prev.message else update.prompt,
-                    headline = if (update.stage == LivenessStage.WAITING_FOR_FACE && !holdingFeedback) {
+                    headline = if (shouldResetHeader) {
                         prev.deviceInfo?.let { "Chấm công · ${it.name}" } ?: prev.headline
                     } else {
                         prev.headline
                     },
-                    lastReceipt = if (update.stage == LivenessStage.WAITING_FOR_FACE) null else prev.lastReceipt,
+                    lastReceipt = if (shouldResetHeader) null else prev.lastReceipt,
                     isError = if (preserveBanner) prev.isError else update.stage == LivenessStage.MULTIPLE_FACES,
                 )
             }
@@ -751,8 +807,10 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             capturedAt = capturedAt,
                         )
                     }.onSuccess { receipt ->
-                        liveness.markPunchCompleted()
+                        val nowMs = SystemClock.elapsedRealtime()
+                        liveness.markPunchCompleted(nowMs)
                         holdFeedbackUntilMs = 0L
+                        scheduleAutoResetAfterPunch()
                         val salutation = when (person.gender) {
                             "female" -> "chị"
                             "male" -> "anh"
@@ -775,13 +833,15 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                             )
                         }
                     }.onFailure { err ->
-                        val isCooldown = (err as? vn.tad.attend.data.ApiException)?.statusCode == 409
+                        val nowMs = SystemClock.elapsedRealtime()
+                        val isCooldown = (err as? ApiException)?.statusCode == 409
                         if (isCooldown) {
-                            liveness.markPunchCompleted()
+                            liveness.markPunchCompleted(nowMs)
+                            scheduleAutoResetAfterPunch()
                         } else {
                             liveness.reset()
                         }
-                        holdFeedbackUntilMs = SystemClock.elapsedRealtime() + 2_500L
+                        holdFeedbackUntilMs = nowMs + 2_500L
                         _ui.update {
                             it.copy(
                                 lastReceipt = null,
@@ -792,6 +852,26 @@ class AttendanceViewModel(application: Application) : AndroidViewModel(applicati
                         }
                     }
                     busyProcessing = false
+                }
+            }
+        }
+    }
+
+    private fun scheduleAutoResetAfterPunch() {
+        autoResetJob?.cancel()
+        autoResetJob = viewModelScope.launch {
+            delay(4_000L)
+            if (_ui.value.mode == AppMode.KIOSK && !busyProcessing) {
+                liveness.reset()
+                holdFeedbackUntilMs = 0L
+                _ui.update { prev ->
+                    prev.copy(
+                        livenessStage = LivenessStage.WAITING_FOR_FACE,
+                        lastReceipt = null,
+                        headline = prev.deviceInfo?.let { "Chấm công · ${it.name}" } ?: prev.headline,
+                        message = "Sẵn sàng lượt tiếp theo. Đưa khuôn mặt vào khung.",
+                        isError = false,
+                    )
                 }
             }
         }

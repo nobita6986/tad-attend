@@ -21,15 +21,19 @@ class LivenessTrackerTest {
         assertTrue(s2.livenessVerified)
         assertTrue(s2.shouldCapture) // 10 deg <= 14 deg straight tolerance -> immediate capture!
 
-        tracker.markPunchCompleted()
+        tracker.markPunchCompleted(nowMs = 300)
         val after = tracker.onObservation(faceCount = 1, yawDeg = 0f, rollDeg = 0f, faceWidthRatio = 0.25f, nowMs = 500)
         assertEquals(LivenessStage.COOLDOWN_WAIT_LEAVE, after.stage)
         assertFalse(after.shouldCapture)
 
-        // Face leaves for >= 900ms -> re-armed for next employee
-        tracker.onObservation(faceCount = 0, nowMs = 1000)
-        val reset = tracker.onObservation(faceCount = 0, nowMs = 2000)
-        assertEquals(LivenessStage.WAITING_FOR_FACE, reset.stage)
+        // Auto-resets after 4s even if face stays continuously in front of camera
+        val autoReset = tracker.onObservation(faceCount = 1, yawDeg = 0f, rollDeg = 0f, faceWidthRatio = 0.25f, nowMs = 4400)
+        assertEquals(LivenessStage.WAITING_FOR_FACE, autoReset.stage)
+        assertTrue(autoReset.autoResetJustTriggered)
+
+        // Ready immediately for next scan
+        val next = tracker.onObservation(faceCount = 1, yawDeg = 0f, rollDeg = 0f, faceWidthRatio = 0.25f, nowMs = 4600)
+        assertEquals(LivenessStage.VERIFY_LIVENESS, next.stage)
     }
 
     @Test

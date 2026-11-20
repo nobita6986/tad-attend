@@ -21,11 +21,49 @@ class DeviceController extends Controller
 {
     private function deviceFor(Request $request): Device { return $request->attributes->get('attendance_device'); }
 
+    public function activate(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'hardware_id' => ['required', 'string', 'min:8', 'max:80'],
+        ]);
+        $hwId = strtoupper(trim($data['hardware_id']));
+
+        $result = DB::transaction(function () use ($hwId) {
+            $device = Device::where('hardware_id', $hwId)->lockForUpdate()->first();
+            abort_if(!$device, 404, "Mã máy {$hwId} chưa được đăng ký trên hệ thống. Hãy thêm Mã máy này trong mục Thiết bị trên web quản trị.");
+            abort_unless($device->active, 403, 'Thiết bị này đã bị thu hồi quyền chấm công.');
+
+            $token = bin2hex(random_bytes(32));
+            $device->update([
+                'token_hash' => hash('sha256', $token),
+                'last_seen_at' => now('UTC'),
+            ]);
+
+            AuditLog::create([
+                'action' => 'device.activated_by_hardware_id',
+                'subject_type' => 'device',
+                'subject_id' => $device->id,
+                'details' => ['name' => $device->name, 'hardware_id' => $hwId],
+            ]);
+
+            return [
+                'token' => $token,
+                'device_id' => $device->id,
+                'name' => $device->name,
+                'direction' => $device->direction,
+                'hardware_id' => $device->hardware_id,
+            ];
+        });
+
+        return response()->json($result);
+    }
+
     public function device(Request $request): JsonResponse
     {
         $device = $this->deviceFor($request);
         return response()->json([
             'device_id' => $device->id, 'name' => $device->name, 'direction' => $device->direction,
+            'hardware_id' => $device->hardware_id,
             'server_time' => now('UTC')->toIso8601String(),
             'model_id' => config('attendance.model_id'),
             'model_version' => config('attendance.model_version'),

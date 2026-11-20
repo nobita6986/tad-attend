@@ -13,6 +13,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import vn.tad.attend.model.ApiErrorBody
 import vn.tad.attend.model.AttendanceReceipt
+import vn.tad.attend.model.DeviceActivationResponse
 import vn.tad.attend.model.DeviceInfo
 import vn.tad.attend.model.DirectEnrollResponse
 import vn.tad.attend.model.EnrolledPerson
@@ -26,6 +27,11 @@ import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class ApiException(val statusCode: Int?, message: String) : IOException(message)
+
+@Serializable
+private data class DeviceActivatePayload(
+    val hardware_id: String,
+)
 
 @Serializable
 private data class EnrollmentPayload(
@@ -103,6 +109,17 @@ class AttendanceApiClient(
             }
             json.decodeFromString<T>(raw)
         }
+    }
+
+    suspend fun activateByHardwareId(baseUrl: String, hardwareId: String): DeviceActivationResponse {
+        val payload = DeviceActivatePayload(hardware_id = hardwareId.trim().uppercase(Locale.US))
+        val body = json.encodeToString(payload).toRequestBody("application/json; charset=utf-8".toMediaType())
+        val req = Request.Builder()
+            .url(buildUrl(baseUrl, "devices/activate"))
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+        return executeJson(req)
     }
 
     suspend fun getDeviceInfo(baseUrl: String, token: String?): DeviceInfo {

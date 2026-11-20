@@ -126,4 +126,27 @@ class AttendanceApiClientTest {
         assertTrue(jsonBody.contains("\"code\":\"NV009\""))
         assertTrue(jsonBody.contains("\"consent_confirmed\":true"))
     }
+
+    @Test
+    fun activatesDeviceByFixedHardwareId() = runTest {
+        val client = AttendanceApiClient(allowCleartextForTest = true)
+        val baseUrl = server.url("/").toString().trimEnd('/')
+
+        val formatted = vn.tad.attend.security.DeviceIdentity.formatHardwareId("a1b2c3d4e5f67890")
+        assertEquals("AND-A1B2-C3D4-E5F6-7890", formatted)
+
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody(
+                    """{"token":"new-tok-64","device_id":"d-2","name":"TB2","direction":"both","hardware_id":"AND-A1B2-C3D4-E5F6-7890"}""",
+                ),
+        )
+        val act = client.activateByHardwareId(baseUrl, formatted)
+        assertEquals("new-tok-64", act.token)
+        assertEquals("TB2", act.name)
+        val req = server.takeRequest()
+        assertEquals("/api/v1/devices/activate", req.path)
+        assertTrue(req.body.readUtf8().contains("AND-A1B2-C3D4-E5F6-7890"))
+    }
 }

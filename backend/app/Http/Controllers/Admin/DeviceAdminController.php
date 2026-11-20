@@ -5,6 +5,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AuditLog;
 use App\Models\Device;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class DeviceAdminController extends Controller
 {
@@ -17,15 +18,20 @@ class DeviceAdminController extends Controller
 
     public function store(Request $request)
     {
+        $normalizedHwId = $this->normalizeHardwareId($request->input('hardware_id'));
+        $request->merge(['hardware_id' => $normalizedHwId]);
+
         $data = $request->validate([
             'name' => ['required', 'string', 'max:120'],
             'direction' => ['nullable', 'in:both,in,out'],
+            'hardware_id' => ['nullable', 'string', 'min:8', 'max:80', 'unique:devices,hardware_id'],
         ]);
 
         $direction = $data['direction'] ?? 'both';
         $token = bin2hex(random_bytes(32));
         $device = Device::create([
             'name' => trim($data['name']),
+            'hardware_id' => $data['hardware_id'] ?? null,
             'direction' => $direction,
             'token_hash' => hash('sha256', $token),
             'active' => true,
@@ -36,12 +42,17 @@ class DeviceAdminController extends Controller
             'action' => 'device.issued',
             'subject_type' => 'device',
             'subject_id' => $device->id,
-            'details' => ['name' => $device->name, 'direction' => $device->direction],
+            'details' => [
+                'name' => $device->name,
+                'direction' => $device->direction,
+                'hardware_id' => $device->hardware_id,
+            ],
         ]);
 
         return redirect()->route('admin.devices.index')->with('issued_device', [
             'id' => $device->id,
             'name' => $device->name,
+            'hardware_id' => $device->hardware_id,
             'direction' => $device->direction,
             'token' => $token,
         ]);
@@ -51,12 +62,19 @@ class DeviceAdminController extends Controller
     {
         abort_unless($device->active, 422, 'Không thể sửa thiết bị đã thu hồi.');
 
+        $normalizedHwId = $this->normalizeHardwareId($request->input('hardware_id'));
+        $request->merge(['hardware_id' => $normalizedHwId]);
+
         $data = $request->validate([
             'direction' => ['required', 'in:both,in,out'],
+            'hardware_id' => ['nullable', 'string', 'min:8', 'max:80', Rule::unique('devices', 'hardware_id')->ignore($device->id)],
         ]);
 
-        $oldDirection = $device->direction;
-        $device->update(['direction' => $data['direction']]);
+        $before = ['direction' => $device->direction, 'hardware_id' => $device->hardware_id];
+        $device->update([
+            'direction' => $data['direction'],
+            'hardware_id' => $data['hardware_id'] ?? null,
+        ]);
 
         AuditLog::create([
             'user_id' => $request->user()->id,
@@ -65,12 +83,12 @@ class DeviceAdminController extends Controller
             'subject_id' => $device->id,
             'details' => [
                 'name' => $device->name,
-                'direction_before' => $oldDirection,
-                'direction_after' => $device->direction,
+                'before' => $before,
+                'after' => ['direction' => $device->direction, 'hardware_id' => $device->hardware_id],
             ],
         ]);
 
-        return back()->with('success', 'Đã cập nhật chế độ chấm công của thiết bị.');
+        return back()->with('success', 'Đã cập nhật cấu hình thiết bị.');
     }
 
     public function revoke(Request $request, Device $device)
@@ -81,9 +99,18 @@ class DeviceAdminController extends Controller
             'action' => 'device.revoked',
             'subject_type' => 'device',
             'subject_id' => $device->id,
-            'details' => ['name' => $device->name],
+            'details' => ['name' => $device->name, 'hardware_id' => $device->hardware_id],
         ]);
 
         return back()->with('success', 'Đã thu hồi thiết bị.');
+    }
+
+    private function normalizeHardwareId(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+        $clean = strtoupper(trim($value));
+        return $clean === '' ? null : $clean;
     }
 }

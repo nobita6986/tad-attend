@@ -19,6 +19,7 @@ data class LivenessUpdate(
     val prompt: String,
     val shouldCapture: Boolean = false,
     val livenessVerified: Boolean = false,
+    val autoResetJustTriggered: Boolean = false,
 )
 
 /**
@@ -27,6 +28,8 @@ data class LivenessUpdate(
  *  - Step 2: Look toward camera (|yaw| <= 14°, |roll| <= 20°) -> captures immediately.
  *  - Smart retry window: if the first frame is blurry or low-score, retains verified liveness
  *    for up to [maxCaptureAttempts] attempts within [retryWindowMs] instead of forcing the user to turn again.
+ *  - Auto-reset after punch: resets automatically when face leaves for [leaveResetMs] OR after
+ *    [autoResetAfterPunchMs] (default 4s) even if the next person steps in immediately.
  */
 class LivenessTracker(
     private val turnThresholdDeg: Float = 9f,
@@ -35,6 +38,7 @@ class LivenessTracker(
     private val maxRollDeg: Float = 20f,
     private val minFaceWidthRatio: Float = 0.14f,
     private val leaveResetMs: Long = 900L,
+    private val autoResetAfterPunchMs: Long = 4_000L,
     private val maxCaptureAttempts: Int = 5,
     private val retryWindowMs: Long = 3_000L,
     private val retrySpacingMs: Long = 220L,
@@ -42,6 +46,7 @@ class LivenessTracker(
     private var livenessVerified: Boolean = false
     private var armed: Boolean = true
     private var absentSinceMs: Long? = null
+    private var punchCompletedAtMs: Long? = null
 
     private var minYawSeen: Float = Float.POSITIVE_INFINITY
     private var maxYawSeen: Float = Float.NEGATIVE_INFINITY
@@ -56,6 +61,7 @@ class LivenessTracker(
         livenessVerified = false
         armed = true
         absentSinceMs = null
+        punchCompletedAtMs = null
         minYawSeen = Float.POSITIVE_INFINITY
         maxYawSeen = Float.NEGATIVE_INFINITY
         sawEyesOpen = false
@@ -65,12 +71,13 @@ class LivenessTracker(
         lastAttemptFailedMs = 0L
     }
 
-    /** Called ONLY after attendance is accepted (or server cooldown 409) to prevent immediate re-trigger. */
-    fun markPunchCompleted() {
+    /** Called ONLY after attendance is accepted (or server cooldown 409) to pause briefly before next person. */
+    fun markPunchCompleted(nowMs: Long = 0L) {
         armed = false
         livenessVerified = false
         verifiedAtMs = null
         captureAttempts = 0
+        punchCompletedAtMs = if (nowMs > 0L) nowMs else null
     }
 
     /**
@@ -102,20 +109,36 @@ class LivenessTracker(
         rightEyeOpenProb: Float? = null,
         nowMs: Long,
     ): LivenessUpdate {
+        // Auto-reset after a completed punch once autoResetAfterPunchMs has elapsed,
+        // even if a face stayed continuously in front of the camera.
+        if (!armed) {
+            val doneAt = punchCompletedAtMs ?: nowMs.also { punchCompletedAtMs = it }
+            if (nowMs - doneAt >= autoResetAfterPunchMs) {
+                reset()
+                return LivenessUpdate(
+                    stage = LivenessStage.WAITING_FOR_FACE,
+                    prompt = "Sẵn sàng lượt tiếp theo. Đưa khuôn mặt vào khung.",
+                    autoResetJustTriggered = true,
+                )
+            }
+        }
+
         if (faceCount == 0) {
             if (absentSinceMs == null) absentSinceMs = nowMs
             val elapsed = nowMs - (absentSinceMs ?: nowMs)
             if (elapsed >= leaveResetMs) {
+                val wasDisarmed = !armed
                 reset()
                 return LivenessUpdate(
                     stage = LivenessStage.WAITING_FOR_FACE,
                     prompt = "Mời người tiếp theo. Đưa khuôn mặt vào khung.",
+                    autoResetJustTriggered = wasDisarmed,
                 )
             }
             return if (!armed) {
                 LivenessUpdate(
                     stage = LivenessStage.COOLDOWN_WAIT_LEAVE,
-                    prompt = "Đã xong. Mời bước ra khỏi khung cho người tiếp theo.",
+                    prompt = "Đã xong. Sẵn sàng cho người tiếp theo...",
                 )
             } else {
                 LivenessUpdate(
@@ -142,9 +165,11 @@ class LivenessTracker(
         }
 
         if (!armed) {
+            val doneAt = punchCompletedAtMs ?: nowMs
+            val remSec = (((autoResetAfterPunchMs - (nowMs - doneAt)).coerceAtLeast(0L) + 999L) / 1000L)
             return LivenessUpdate(
                 stage = LivenessStage.COOLDOWN_WAIT_LEAVE,
-                prompt = "Đã ghi nhận. Mời người tiếp theo.",
+                prompt = "Đã ghi nhận. Tự động sẵn sàng lượt mới sau ${remSec}s...",
             )
         }
 
@@ -192,7 +217,6 @@ class LivenessTracker(
             }
         }
 
-        // Expire stale verified state if user never looked straight within retryWindowMs
         val started = verifiedAtMs ?: nowMs
         if (nowMs - started > retryWindowMs + 2_000L) {
             reset()

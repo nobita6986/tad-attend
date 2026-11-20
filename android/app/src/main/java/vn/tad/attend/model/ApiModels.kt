@@ -8,11 +8,21 @@ data class DeviceInfo(
     @SerialName("device_id") val deviceId: String,
     val name: String,
     val direction: String,
+    @SerialName("hardware_id") val hardwareId: String? = null,
     @SerialName("server_time") val serverTime: String,
     @SerialName("model_id") val modelId: String,
     @SerialName("model_version") val modelVersion: String,
     @SerialName("embedding_dimensions") val embeddingDimensions: Int = 128,
     @SerialName("min_score") val minScore: Double,
+)
+
+@Serializable
+data class DeviceActivationResponse(
+    val token: String,
+    @SerialName("device_id") val deviceId: String,
+    val name: String,
+    val direction: String,
+    @SerialName("hardware_id") val hardwareId: String? = null,
 )
 
 @Serializable
