@@ -52,4 +52,43 @@ class AdminViewsTest extends TestCase
         $this->actingAs($admin)->get('/admin/devices')->assertOk()->assertSee('Cổng chính');
         $this->actingAs($admin)->get('/admin/users')->assertOk()->assertSee('Tài khoản Quản trị');
     }
+
+    public function test_attendance_and_reports_render_date_presets_and_default_to_this_month(): void
+    {
+        $admin = User::create([
+            'name' => 'Quản trị viên',
+            'email' => 'preset-admin@example.com',
+            'password' => Hash::make('StrongPass123!'),
+            'is_admin' => true,
+        ]);
+
+        $tz = config('attendance.timezone');
+        $today = \Carbon\CarbonImmutable::now($tz);
+        $expectedFrom = $today->startOfMonth()->format('Y-m-d');
+        $expectedTo = $today->format('Y-m-d');
+
+        $this->actingAs($admin)->get('/admin/attendance')
+            ->assertOk()
+            ->assertViewHas('from', $expectedFrom)
+            ->assertViewHas('to', $expectedTo)
+            ->assertSee('Hôm nay')
+            ->assertSee('Tuần này')
+            ->assertSee('Tháng này')
+            ->assertSee('Tháng trước');
+
+        // Legacy ?date= param remains backward-compatible
+        $this->actingAs($admin)->get('/admin/attendance?date=2026-11-15')
+            ->assertOk()
+            ->assertViewHas('from', '2026-11-15')
+            ->assertViewHas('to', '2026-11-15');
+
+        $this->actingAs($admin)->get('/admin/reports/daily')
+            ->assertOk()
+            ->assertViewHas('from', $expectedFrom)
+            ->assertViewHas('to', $expectedTo)
+            ->assertSee('Hôm nay')
+            ->assertSee('Tuần này')
+            ->assertSee('Tháng này')
+            ->assertSee('Tháng trước');
+    }
 }

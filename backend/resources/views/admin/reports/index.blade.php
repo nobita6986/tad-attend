@@ -29,6 +29,12 @@
 </div>
 
 <section class="card">
+  <x-date-presets
+    :from="$from"
+    :to="$to"
+    route="admin.reports.index"
+    :preserve="['region', 'branch_id', 'employee_id', 'per_page']"
+  />
   <form method="get" class="form-grid" style="align-items:end">
     <div class="field">
       <label for="rep-from">Từ ngày</label>
