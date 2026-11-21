@@ -603,8 +603,20 @@ final class RecognitionCoordinator: ObservableObject {
         let passesScore = top.1 >= info.min_score
         let passesMargin = matches.count == 1 || (top.1 - matches[1].1) >= minSecondBestMargin
 
-        guard passesScore && passesMargin else {
-            handleKioskRetryOrFail(errorMessage: "Vui lòng đứng đủ sáng, nhìn thẳng vào camera và thử lại.")
+        if passesScore && !passesMargin {
+            notificationHaptic.notificationOccurred(.warning)
+            resetChallenge()
+            holdFeedbackUntil = Date().addingTimeInterval(4.0)
+            visualState = .warning
+            headline = "Trùng khuôn mặt 2 hồ sơ"
+            message = "Khuôn mặt trùng giữa \(top.0.full_name) và \(matches[1].0.full_name). Vui lòng xóa/đăng ký lại để tách riêng."
+            working = false
+            return
+        }
+
+        guard passesScore else {
+            let pct = max(0, min(100, Int((top.1 * 100.0).rounded())))
+            handleKioskRetryOrFail(errorMessage: "Chưa khớp khuôn mặt (\(pct)%). Vui lòng đứng đủ sáng, nhìn thẳng và thử lại.")
             return
         }
 

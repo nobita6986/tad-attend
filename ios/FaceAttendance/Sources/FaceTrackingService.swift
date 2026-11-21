@@ -40,9 +40,12 @@ final class FaceTrackingService: NSObject, ARSessionDelegate {
 
         let faces = frame.anchors.compactMap { $0 as? ARFaceAnchor }.filter { $0.isTracked }
         if faces.count == 1, let face = faces.first {
-            // Compute face orientation RELATIVE to camera so holding phone at any angle works effortlessly
+            // Compute face orientation RELATIVE to camera.
+            // Note: ARKit camera sensor space is landscape-right:
+            //   +X points DOWN in portrait (pitch), +Y points RIGHT in portrait (yaw), +Z points toward user.
+            // Using columns.2.y gives true left/right yaw in portrait regardless of phone tilt!
             let faceInCamera = simd_mul(simd_inverse(frame.camera.transform), face.transform)
-            let yawRad = atan2(faceInCamera.columns.2.x, faceInCamera.columns.2.z)
+            let yawRad = atan2(faceInCamera.columns.2.y, faceInCamera.columns.2.z)
             let yawDeg = yawRad * (180.0 / .pi)
 
             let blinkL = face.blendShapes[.eyeBlinkLeft]?.floatValue
