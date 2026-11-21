@@ -256,30 +256,52 @@ struct ContentView: View {
                     }
                     .padding(12)
                     Spacer()
+
+                    // Prominent floating celebration pill on camera when punch succeeds
+                    if let receipt = coordinator.lastReceipt {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.body.weight(.bold))
+                            Text("\(receipt.employee_name) · \(coordinator.lastPunchTimeText)")
+                                .font(.subheadline.weight(.bold))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            (receipt.review_state == "accepted" ? TADTheme.brand : Color.orange),
+                            in: Capsule()
+                        )
+                        .shadow(color: Color.black.opacity(0.22), radius: 8, y: 3)
+                        .padding(.bottom, 14)
+                        .transition(.scale.combined(with: .opacity))
+                    }
                 }
+                .animation(.spring(response: 0.35, dampingFraction: 0.78), value: coordinator.lastReceipt?.event_uuid)
             }
             .frame(maxWidth: .infinity)
             .frame(minHeight: 320, maxHeight: 440)
             .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
-                    .strokeBorder(statusBorderColor, lineWidth: 2.5)
+                    .strokeBorder(statusBorderColor, lineWidth: 3)
             )
             .shadow(color: Color.black.opacity(0.08), radius: 14, y: 6)
             .padding(.horizontal, 16)
 
-            // Elevated bottom status card
+            // Elevated bottom status card (vibrant green tint on success, unmistakable!)
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
                     statusIconBadge
                     VStack(alignment: .leading, spacing: 3) {
                         Text(coordinator.headline)
                             .font(.headline)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(coordinator.visualState == .success ? TADTheme.brand : .primary)
                             .lineLimit(2)
                         Text(coordinator.message)
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(coordinator.visualState == .success ? .primary : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
@@ -290,7 +312,7 @@ struct ContentView: View {
                     HStack {
                         Label(
                             receipt.review_state == "accepted"
-                                ? "Đã ghi nhận thành công"
+                                ? "Đã ghi nhận lúc \(coordinator.lastPunchTimeText)"
                                 : "Đã gửi · Chờ quản trị duyệt",
                             systemImage: receipt.review_state == "accepted"
                                 ? "checkmark.seal.fill"
@@ -299,11 +321,11 @@ struct ContentView: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(receipt.review_state == "accepted" ? TADTheme.brand : .orange)
                         Spacer()
-                        Text(receipt.direction == "in" ? "Vào ca" : "Ra ca")
+                        Text(receipt.direction == "in" ? "Vào ca" : (receipt.direction == "out" ? "Ra ca" : "Chấm công"))
                             .font(.caption.weight(.semibold))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(TADTheme.brand.opacity(0.12), in: Capsule())
+                            .background(TADTheme.brand.opacity(0.14), in: Capsule())
                             .foregroundStyle(TADTheme.brand)
                     }
                 }
@@ -335,11 +357,22 @@ struct ContentView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity)
-            .background(TADTheme.card, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .background(
+                coordinator.visualState == .success
+                    ? TADTheme.brand.opacity(0.12)
+                    : TADTheme.card,
+                in: RoundedRectangle(cornerRadius: 22, style: .continuous)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .strokeBorder(Color(.separator).opacity(0.25), lineWidth: 0.5)
+                    .strokeBorder(
+                        coordinator.visualState == .success
+                            ? TADTheme.brand.opacity(0.55)
+                            : Color(.separator).opacity(0.25),
+                        lineWidth: coordinator.visualState == .success ? 1.5 : 0.5
+                    )
             )
+            .animation(.easeInOut(duration: 0.25), value: coordinator.visualState)
             .padding(.horizontal, 16)
 
             Spacer(minLength: 0)

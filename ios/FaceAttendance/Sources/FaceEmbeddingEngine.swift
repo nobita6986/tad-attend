@@ -240,11 +240,19 @@ final class FaceEmbeddingEngine {
             dataType: .float32
         )
         let ptr = multiArray.dataPointer.assumingMemoryBound(to: Float32.self)
-        for i in 0..<pixelCount {
-            let base = i * 4
-            ptr[i] = Float32(rgba112[base])
-            ptr[pixelCount + i] = Float32(rgba112[base + 1])
-            ptr[2 * pixelCount + i] = Float32(rgba112[base + 2])
+        let sC = multiArray.strides[1].intValue
+        let sH = multiArray.strides[2].intValue
+        let sW = multiArray.strides[3].intValue
+        for y in 0..<size {
+            let rowPixelBase = y * size
+            let rowStrideBase = y * sH
+            for x in 0..<size {
+                let base = (rowPixelBase + x) * 4
+                let idx = rowStrideBase + x * sW
+                ptr[idx] = Float32(rgba112[base])
+                ptr[sC + idx] = Float32(rgba112[base + 1])
+                ptr[2 * sC + idx] = Float32(rgba112[base + 2])
+            }
         }
 
         let provider = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(multiArray: multiArray)])
