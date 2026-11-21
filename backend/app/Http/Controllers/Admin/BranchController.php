@@ -109,6 +109,10 @@ class BranchController extends Controller
             'name' => ['required', 'string', 'max:160'],
             'region' => ['required', Rule::in(array_keys(Branch::REGIONS))],
             'address' => ['nullable', 'string', 'max:500'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'allowed_radius_meters' => ['nullable', 'integer', 'between:10,10000'],
+            'enforce_geofence' => ['nullable', 'boolean'],
             'phone' => ['nullable', 'string', 'max:40'],
             'manager_name' => ['nullable', 'string', 'max:160'],
             'manager_phone' => ['nullable', 'string', 'max:40'],
@@ -126,6 +130,18 @@ class BranchController extends Controller
             }
         }
         $data['default_shift_id'] = !empty($data['default_shift_id']) ? (int) $data['default_shift_id'] : null;
+        $data['latitude'] = ($data['latitude'] ?? null) !== null && $data['latitude'] !== '' ? (float) $data['latitude'] : null;
+        $data['longitude'] = ($data['longitude'] ?? null) !== null && $data['longitude'] !== '' ? (float) $data['longitude'] : null;
+        $data['allowed_radius_meters'] = !empty($data['allowed_radius_meters'])
+            ? (int) $data['allowed_radius_meters']
+            : ($data['latitude'] !== null && $data['longitude'] !== null ? 150 : null);
+        $data['enforce_geofence'] = $request->boolean('enforce_geofence');
+
+        if ($data['enforce_geofence'] && ($data['latitude'] === null || $data['longitude'] === null)) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'latitude' => 'Cần nhập đầy đủ Vĩ độ và Kinh độ trụ sở trước khi bật giới hạn khoảng cách GPS.',
+            ]);
+        }
 
         return $data;
     }

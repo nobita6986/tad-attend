@@ -253,6 +253,10 @@ class DeviceController extends Controller
                 'name' => $device->branch->name,
                 'region' => $device->branch->region,
                 'active' => $device->branch->active,
+                'latitude' => $device->branch->latitude,
+                'longitude' => $device->branch->longitude,
+                'allowed_radius_meters' => $device->branch->allowed_radius_meters,
+                'enforce_geofence' => $device->branch->enforce_geofence,
             ] : null,
             'server_time' => now('UTC')->toIso8601String(),
             'model_id' => config('attendance.model_id'),
@@ -471,11 +475,34 @@ class DeviceController extends Controller
             'model_id' => ['required', 'string', 'max:80'],
             'model_version' => ['required', 'string', 'max:40'],
             'offline' => ['required', 'boolean'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'gps_accuracy_meters' => ['nullable', 'numeric', 'min:0', 'max:50000'],
             'image' => ['required', 'image', 'mimes:jpeg,jpg', 'max:250', 'dimensions:max_width=1600,max_height=1600'],
         ]);
         $device = $this->deviceFor($request)->load('branch');
         if ($device->branch && !$device->branch->active) {
             abort(403, 'Chi nhánh của thiết bị này đang bị vô hiệu hóa.');
+        }
+
+        $lat = isset($data['latitude']) && $data['latitude'] !== '' ? (float) $data['latitude'] : null;
+        $lng = isset($data['longitude']) && $data['longitude'] !== '' ? (float) $data['longitude'] : null;
+        $gpsAccuracy = isset($data['gps_accuracy_meters']) && $data['gps_accuracy_meters'] !== '' ? round((float) $data['gps_accuracy_meters'], 2) : null;
+        $distanceMeters = null;
+
+        if ($device->branch && $device->branch->hasCoordinates() && $lat !== null && $lng !== null) {
+            $distanceMeters = \App\Models\Branch::haversineMeters($lat, $lng, (float) $device->branch->latitude, (float) $device->branch->longitude);
+        }
+
+        if ($device->branch && $device->branch->hasEnforcedGeofence()) {
+            if ($lat === null || $lng === null) {
+                abort(422, 'Thiết bị cần bật GPS để xác thực vị trí chấm công tại trụ sở chi nhánh.');
+            }
+            $maxRadius = (int) $device->branch->allowed_radius_meters;
+            if ($distanceMeters !== null && $distanceMeters > $maxRadius) {
+                $distFmt = number_format($distanceMeters, 1, ',', '.');
+                abort(422, "Vị trí chấm công cách trụ sở {$device->branch->name} {$distFmt} m, vượt quá giới hạn {$maxRadius} m.");
+            }
         }
         // Do not accept unconfigured or uncalibrated model deployments.
         abort_unless($this->isConfiguredModel($data['model_id'], $data['model_version']), 409, 'Mô hình chưa cấu hình hoặc phiên bản không khớp.');
@@ -500,7 +527,7 @@ class DeviceController extends Controller
             $imagePath = $request->file('image')->storeAs(
                 'attendance/'.$now->format('Y/m'), Str::uuid()->toString().'.jpg', 'local'
             );
-            $event = DB::transaction(function () use ($request, $data, $device, $now, $captured, $offline, $needsReview, $imagePath) {
+            $event = DB::transaction(function () use ($request, $data, $device, $now, $captured, $offline, $needsReview, $imagePath, $lat, $lng, $gpsAccuracy, $distanceMeters) {
                 // Serialize per employee to prevent two devices creating simultaneous punches.
                 $employee = Employee::whereKey($data['employee_id'])->lockForUpdate()->firstOrFail();
                 $repeat = AttendanceEvent::where('event_uuid', $data['event_uuid'])->first();
@@ -532,6 +559,8 @@ class DeviceController extends Controller
                     'is_offline' => $offline, 'match_score' => $data['match_score'],
                     'liveness_method' => $data['liveness_method'], 'model_id' => $data['model_id'],
                     'model_version' => $data['model_version'], 'image_path' => $imagePath,
+                    'latitude' => $lat, 'longitude' => $lng,
+                    'gps_accuracy_meters' => $gpsAccuracy, 'distance_meters' => $distanceMeters,
                 ]);
             });
             if ($event->image_path !== $imagePath) { Storage::disk('local')->delete($imagePath); }

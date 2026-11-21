@@ -20,6 +20,10 @@ class Branch extends Model
         'name',
         'region',
         'address',
+        'latitude',
+        'longitude',
+        'allowed_radius_meters',
+        'enforce_geofence',
         'phone',
         'manager_name',
         'manager_phone',
@@ -31,7 +35,33 @@ class Branch extends Model
     {
         return [
             'active' => 'boolean',
+            'enforce_geofence' => 'boolean',
+            'latitude' => 'float',
+            'longitude' => 'float',
+            'allowed_radius_meters' => 'integer',
         ];
+    }
+
+    public function hasCoordinates(): bool
+    {
+        return $this->latitude !== null && $this->longitude !== null;
+    }
+
+    public function hasEnforcedGeofence(): bool
+    {
+        return $this->enforce_geofence && $this->hasCoordinates() && (int) $this->allowed_radius_meters > 0;
+    }
+
+    public static function haversineMeters(float $lat1, float $lng1, float $lat2, float $lng2): float
+    {
+        $earthRadius = 6371000.0;
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLng = deg2rad($lng2 - $lng1);
+        $a = sin($dLat / 2) ** 2
+            + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng / 2) ** 2;
+        $c = 2 * atan2(sqrt($a), sqrt(max(0.0, 1.0 - $a)));
+
+        return round($earthRadius * $c, 2);
     }
 
     public function regionLabel(): string

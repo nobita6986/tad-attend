@@ -1,13 +1,43 @@
 import Foundation
 
+struct BranchInfo: Decodable, Equatable {
+    let id: Int
+    let code: String
+    let name: String
+    let region: String
+    let active: Bool?
+    let latitude: Double?
+    let longitude: Double?
+    let allowed_radius_meters: Int?
+    let enforce_geofence: Bool?
+
+    var hasCoordinates: Bool { latitude != nil && longitude != nil }
+    var hasEnforcedGeofence: Bool {
+        (enforce_geofence ?? false) && hasCoordinates && (allowed_radius_meters ?? 0) > 0
+    }
+}
+
 struct DeviceInfo: Decodable {
     let device_id: String
     let name: String
     let direction: String
+    let hardware_id: String?
+    let branch: BranchInfo?
     let server_time: String
     let model_id: String
     let model_version: String
+    let embedding_dimensions: Int?
     let min_score: Double
+}
+
+struct DeviceRegistrationResponse: Decodable {
+    let status: String
+    let message: String?
+    let token: String?
+    let device_id: String?
+    let name: String?
+    let direction: String?
+    let hardware_id: String?
 }
 
 struct EnrolledPerson: Decodable, Identifiable {
@@ -18,8 +48,45 @@ struct EnrolledPerson: Decodable, Identifiable {
     let template: [Double]
 }
 
-struct RosterResponse: Decodable { let employees: [EnrolledPerson] }
-struct EnrollmentResponse: Decodable { let employee_id: Int; let enrolled_at: String }
+struct RosterResponse: Decodable {
+    let employees: [EnrolledPerson]
+}
+
+struct ShiftOption: Decodable, Identifiable, Hashable {
+    let id: Int
+    let code: String
+    let name: String
+    let starts_at: String
+    let ends_at: String
+}
+
+struct EnrollmentEmployee: Decodable, Identifiable, Hashable {
+    let id: Int
+    let code: String
+    let full_name: String
+    let department: String?
+    let shift_id: Int?
+    let has_face: Bool
+}
+
+struct EnrollmentOptionsResponse: Decodable {
+    let next_employee_code: String
+    let shifts: [ShiftOption]
+    let employees: [EnrollmentEmployee]
+}
+
+struct DirectEnrollResponse: Decodable {
+    let employee_id: Int
+    let code: String
+    let full_name: String
+    let enrolled_at: String
+}
+
+struct EnrollmentResponse: Decodable {
+    let employee_id: Int
+    let enrolled_at: String
+}
+
 struct AttendanceReceipt: Decodable {
     let event_uuid: String
     let employee_name: String
@@ -29,21 +96,51 @@ struct AttendanceReceipt: Decodable {
     let duplicate: Bool
 }
 
-struct APIMessage: Decodable { let message: String? }
+struct LocationSnapshot: Codable, Equatable {
+    let latitude: Double
+    let longitude: Double
+    let accuracyMeters: Double
+    let capturedAt: Date
+}
+
+struct APIMessage: Decodable {
+    let message: String?
+}
 
 enum AppError: LocalizedError {
-    case notConfigured, modelMissing, noSingleFace, badModelIO, badEmbedding, livenessNotVerified
-    case network(String), recognitionUncertain
+    case notConfigured
+    case modelMissing
+    case noSingleFace
+    case badModelIO
+    case badEmbedding
+    case livenessNotVerified
+    case locationUnavailable
+    case outsideGeofence(distance: Double, limit: Int, branchName: String)
+    case network(String)
+    case recognitionUncertain
+
     var errorDescription: String? {
         switch self {
-        case .notConfigured: return "Chưa cấu hình địa chỉ HTTPS và token thiết bị."
-        case .modelMissing: return "Chưa có FaceEmbedding.mlmodelc. Không cho phép chấm công."
-        case .noSingleFace: return "Cần đúng một khuôn mặt rõ ràng trong khung hình."
-        case .badModelIO: return "Input/output của Core ML model không đúng hợp đồng."
-        case .badEmbedding: return "Không tạo được đặc trưng khuôn mặt hợp lệ."
-        case .livenessNotVerified: return "Chưa hoàn tất thử thách kiểm tra người thật."
-        case .network(let text): return text
-        case .recognitionUncertain: return "Không xác định chắc chắn. Vui lòng liên hệ quản trị."
+        case .notConfigured:
+            return "Thiết bị chưa kết nối máy chủ. Mở mục Cấu hình để đăng ký thiết bị."
+        case .modelMissing:
+            return "Không khởi tạo được bộ nhận diện khuôn mặt."
+        case .noSingleFace:
+            return "Vui lòng giữ đúng 1 khuôn mặt rõ ràng trong khung hình."
+        case .badModelIO:
+            return "Dữ liệu mô hình khuôn mặt không hợp lệ."
+        case .badEmbedding:
+            return "Không tạo được đặc trưng khuôn mặt hợp lệ."
+        case .livenessNotVerified:
+            return "Vui lòng quay nhẹ đầu sang trái hoặc phải để xác nhận người thật."
+        case .locationUnavailable:
+            return "Chưa lấy được vị trí GPS. Vui lòng bật Dịch vụ định vị cho TAD Attend."
+        case .outsideGeofence(let distance, let limit, let branchName):
+            return "Bạn đang cách trụ sở \(branchName) \(Int(distance.rounded())) m, vượt giới hạn \(limit) m."
+        case .network(let text):
+            return text
+        case .recognitionUncertain:
+            return "Chưa nhận diện rõ. Vui lòng nhìn thẳng vào camera và thử lại."
         }
     }
 }

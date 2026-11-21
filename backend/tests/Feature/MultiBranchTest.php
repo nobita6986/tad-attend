@@ -300,4 +300,105 @@ class MultiBranchTest extends TestCase
             ->assertForbidden();
         $this->assertSame($deviceHn->branch_id, $hn->id);
     }
+
+    public function test_branch_geofence_blocks_remote_punches_and_records_distance(): void
+    {
+        Storage::fake('local');
+        config([
+            'attendance.model_id' => 'mobilefacenet_test',
+            'attendance.model_version' => '1.0',
+            'attendance.embedding_dimensions' => 4,
+            'attendance.min_score' => 0.7,
+        ]);
+
+        [$hn] = $this->makeBranches();
+        $hn->update([
+            'latitude' => 20.985421,
+            'longitude' => 105.853192,
+            'allowed_radius_meters' => 100,
+            'enforce_geofence' => true,
+        ]);
+        $shift = $this->makeShift('HC');
+        $emp = Employee::create([
+            'branch_id' => $hn->id,
+            'code' => 'HN099',
+            'full_name' => 'NV Test GPS',
+            'shift_id' => $shift->id,
+            'active' => true,
+            'consent_at' => now('UTC'),
+            'consent_method' => 'electronic_consent',
+        ]);
+        FaceTemplate::create([
+            'employee_id' => $emp->id,
+            'model_id' => 'mobilefacenet_test',
+            'model_version' => '1.0',
+            'embedding' => [0.5, 0.5, 0.5, 0.5],
+            'active' => true,
+            'enrolled_at' => now('UTC'),
+        ]);
+
+        $token = 'geofence-device-secret-token-1234567890';
+        Device::create([
+            'branch_id' => $hn->id,
+            'name' => 'iPhone Cổng HN',
+            'hardware_id' => 'IOS-HN01-0001-0001',
+            'direction' => 'both',
+            'token_hash' => hash('sha256', $token),
+            'active' => true,
+            'approval_status' => 'approved',
+        ]);
+
+        // 1. Missing GPS when enforce_geofence=true -> 422
+        $this->withToken($token)->post('/api/v1/attendance', [
+            'event_uuid' => Str::uuid()->toString(),
+            'employee_id' => $emp->id,
+            'captured_at' => now('UTC')->toIso8601String(),
+            'match_score' => 0.95,
+            'liveness_passed' => '1',
+            'liveness_method' => 'arkit_head_turn',
+            'model_id' => 'mobilefacenet_test',
+            'model_version' => '1.0',
+            'offline' => '0',
+            'image' => UploadedFile::fake()->image('a.jpg', 200, 200),
+        ])->assertStatus(422);
+
+        // 2. GPS ~1.1km away (taken home!) -> 422 rejected
+        $this->withToken($token)->post('/api/v1/attendance', [
+            'event_uuid' => Str::uuid()->toString(),
+            'employee_id' => $emp->id,
+            'captured_at' => now('UTC')->toIso8601String(),
+            'match_score' => 0.95,
+            'liveness_passed' => '1',
+            'liveness_method' => 'arkit_head_turn',
+            'model_id' => 'mobilefacenet_test',
+            'model_version' => '1.0',
+            'offline' => '0',
+            'latitude' => 20.995421,
+            'longitude' => 105.853192,
+            'gps_accuracy_meters' => 12,
+            'image' => UploadedFile::fake()->image('b.jpg', 200, 200),
+        ])->assertStatus(422);
+
+        // 3. GPS ~11m away (inside 100m HQ radius) -> 201 accepted and distance recorded!
+        $this->withToken($token)->post('/api/v1/attendance', [
+            'event_uuid' => Str::uuid()->toString(),
+            'employee_id' => $emp->id,
+            'captured_at' => now('UTC')->toIso8601String(),
+            'match_score' => 0.95,
+            'liveness_passed' => '1',
+            'liveness_method' => 'arkit_head_turn',
+            'model_id' => 'mobilefacenet_test',
+            'model_version' => '1.0',
+            'offline' => '0',
+            'latitude' => 20.985521,
+            'longitude' => 105.853192,
+            'gps_accuracy_meters' => 10.5,
+            'image' => UploadedFile::fake()->image('c.jpg', 200, 200),
+        ])->assertStatus(201);
+
+        $ev = AttendanceEvent::where('employee_id', $emp->id)->firstOrFail();
+        $this->assertNotNull($ev->distance_meters);
+        $this->assertLessThan(20.0, $ev->distance_meters);
+        $this->assertEquals(10.5, $ev->gps_accuracy_meters);
+    }
 }
