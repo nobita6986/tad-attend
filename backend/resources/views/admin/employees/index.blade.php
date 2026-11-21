@@ -1,10 +1,14 @@
 @extends('admin.layout')
 @section('title','Nhân viên')
 @section('content')
+@php
+  $canChooseAnyBranch = auth()->user()->hasGlobalBranchAccess();
+  $transferTargets = $canChooseAnyBranch ? $allActiveBranches : $branches->where('active', true);
+@endphp
 <div class="page-header">
   <div>
     <h1>Quản lý nhân viên</h1>
-    <p class="page-subtitle">Quản lý hồ sơ, phân ca, sự đồng ý sinh trắc và trạng thái khuôn mặt. Có thể thêm nhân viên và chụp khuôn mặt trực tiếp trên app chấm công.</p>
+    <p class="page-subtitle">Quản lý hồ sơ, chi nhánh, phân ca, điều chuyển chi nhánh và kích hoạt/vô hiệu hóa nhân viên. Phạm vi: <strong>{{ auth()->user()->scopeLabel() }}</strong>.</p>
   </div>
 </div>
 
@@ -14,6 +18,19 @@
     <form method="post" action="{{ route('admin.employees.store') }}" style="margin-top:1rem">
       @csrf
       <div class="form-grid">
+        <div class="field">
+          <label for="emp-branch">Chi nhánh {{ $canChooseAnyBranch ? '(tùy chọn)' : '*' }}</label>
+          <select id="emp-branch" name="branch_id" @if(!$canChooseAnyBranch) required @endif>
+            @if($canChooseAnyBranch)
+              <option value="">Chưa gán chi nhánh</option>
+            @endif
+            @foreach($branches as $b)
+              <option value="{{ $b->id }}" @selected(old('branch_id', $selectedBranchId ?? ($branches->count() === 1 ? $branches->first()->id : null)) == $b->id)>
+                {{ $b->code }} – {{ $b->name }}
+              </option>
+            @endforeach
+          </select>
+        </div>
         <div class="field">
           <label for="emp-code">Mã nhân viên * <span class="muted small">(tự sinh · có thể sửa)</span></label>
           <input id="emp-code" name="code" maxlength="32" value="{{ old('code', $suggestedCode) }}" placeholder="{{ $suggestedCode }}">
@@ -36,9 +53,11 @@
         <div class="field">
           <label for="emp-shift">Ca làm mặc định</label>
           <select id="emp-shift" name="shift_id">
-            <option value="">Chưa phân ca</option>
+            <option value="">Theo ca mặc định của chi nhánh</option>
             @foreach($shifts as $shift)
-              <option value="{{ $shift->id }}" @selected(old('shift_id')==$shift->id)>{{ $shift->name }}</option>
+              <option value="{{ $shift->id }}" @selected(old('shift_id')==$shift->id)>
+                {{ $shift->name }} @if($shift->branch)({{ $shift->branch->code }})@endif
+              </option>
             @endforeach
           </select>
         </div>
@@ -51,6 +70,52 @@
 </section>
 
 <section class="card">
+  <form method="get" class="form-grid" style="align-items:end">
+    @if($canChooseAnyBranch || auth()->user()->effectiveRole() === 'regional_accountant')
+      <div class="field">
+        <label for="emp-filter-region">Miền</label>
+        <select id="emp-filter-region" name="region">
+          <option value="">Tất cả miền</option>
+          @foreach($regions as $rKey => $rLabel)
+            <option value="{{ $rKey }}" @selected($selectedRegion === $rKey)>{{ $rLabel }}</option>
+          @endforeach
+        </select>
+      </div>
+    @endif
+    @if($branches->count() > 1)
+      <div class="field">
+        <label for="emp-filter-branch">Chi nhánh</label>
+        <select id="emp-filter-branch" name="branch_id">
+          <option value="">Tất cả chi nhánh</option>
+          @foreach($branches as $b)
+            <option value="{{ $b->id }}" @selected($selectedBranchId == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+          @endforeach
+        </select>
+      </div>
+    @endif
+    <div class="field">
+      <label for="emp-filter-status">Trạng thái</label>
+      <select id="emp-filter-status" name="status">
+        <option value="">Tất cả</option>
+        <option value="active" @selected($statusFilter === 'active')>Đang làm việc</option>
+        <option value="inactive" @selected($statusFilter === 'inactive')>Đã vô hiệu hóa</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="emp-filter-pp">Số dòng / trang</label>
+      <select id="emp-filter-pp" name="per_page">
+        @foreach([20, 30, 50, 100] as $opt)
+          <option value="{{ $opt }}" @selected($perPage === $opt)>{{ $opt }} dòng</option>
+        @endforeach
+      </select>
+    </div>
+    <div>
+      <button type="submit" style="width:100%"><x-icon name="filter" :size="15" /> Lọc nhân viên</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
   <div class="card-head">
     <h2><x-icon name="users" :size="18" /> Danh sách nhân viên ({{ $employees->total() }})</h2>
   </div>
@@ -60,7 +125,7 @@
       <thead>
         <tr>
           <th>Nhân viên</th>
-          <th>Bộ phận / Ca</th>
+          <th>Chi nhánh / Bộ phận / Ca</th>
           <th>Trạng thái</th>
           <th>Khuôn mặt</th>
           <th>Quản lý</th>
@@ -82,22 +147,35 @@
                 </div>
               </div>
             </td>
-            <td data-label="Bộ phận / Ca">
-              <div>{{ $e->department ?: '—' }}</div>
-              <div class="muted small">{{ $e->shift?->name ?: 'Chưa phân ca' }}</div>
+            <td data-label="Chi nhánh / Bộ phận / Ca">
+              @if($e->branch)
+                <div><x-badge variant="info">{{ $e->branch->code }} – {{ $e->branch->name }}</x-badge></div>
+              @else
+                <div class="muted small">Chưa gán chi nhánh</div>
+              @endif
+              <div class="muted small" style="margin-top:3px">{{ $e->department ?: '—' }} · {{ $e->shift?->name ?: ($e->branch?->defaultShift?->name ? $e->branch->defaultShift->name . ' (CN)' : 'Chưa phân ca') }}</div>
             </td>
             <td data-label="Trạng thái">
               <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
-                <x-badge :variant="$e->active ? 'success' : 'danger'">{{ $e->active ? 'Đang làm' : 'Tạm khóa' }}</x-badge>
+                <x-badge :variant="$e->active ? 'success' : 'danger'">{{ $e->active ? 'Đang làm' : 'Vô hiệu hóa' }}</x-badge>
                 <span class="muted small">{{ $e->consent_at ? 'Đã đồng ý sinh trắc' : 'Chưa đồng ý' }}</span>
               </div>
             </td>
             <td data-label="Khuôn mặt">
               <x-badge :variant="$hasFace ? 'info' : 'warning'">{{ $hasFace ? 'Đã đăng ký' : 'Chưa có mặt' }}</x-badge>
             </td>
-            <td data-label="Quản lý" style="min-width:260px">
+            <td data-label="Quản lý" style="min-width:270px">
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+                <form method="post" action="{{ route('admin.employees.toggle-active', $e) }}" style="margin:0">
+                  @csrf
+                  <button type="submit" class="btn-sm {{ $e->active ? 'btn-outline' : '' }}">
+                    {{ $e->active ? 'Vô hiệu hóa' : 'Kích hoạt lại' }}
+                  </button>
+                </form>
+              </div>
+
               <details class="disclosure">
-                <summary><x-icon name="edit" :size="14" /> Sửa hồ sơ / Phân ca / Đồng ý</summary>
+                <summary><x-icon name="edit" :size="14" /> Sửa hồ sơ / Điều chuyển / Phân ca</summary>
                 <form method="post" action="{{ route('admin.employees.update', $e) }}" style="margin-top:0.85rem">
                   @csrf @method('PUT')
                   <div class="form-grid">
@@ -120,7 +198,7 @@
                     <div class="field">
                       <label>Ca làm</label>
                       <select name="shift_id">
-                        <option value="">Chưa phân ca</option>
+                        <option value="">Theo ca mặc định CN</option>
                         @foreach($shifts as $shift)
                           <option value="{{ $shift->id }}" @selected($e->shift_id==$shift->id)>{{ $shift->name }}</option>
                         @endforeach
@@ -129,13 +207,59 @@
                     <div class="field">
                       <label>Hoạt động</label>
                       <select name="active">
-                        <option value="1" @selected($e->active)>Có</option>
-                        <option value="0" @selected(!$e->active)>Không</option>
+                        <option value="1" @selected($e->active)>Đang làm</option>
+                        <option value="0" @selected(!$e->active)>Vô hiệu hóa</option>
                       </select>
                     </div>
                   </div>
                   <div style="margin-top:0.8rem"><button type="submit" class="btn-sm">Lưu hồ sơ</button></div>
                 </form>
+
+                @if($transferTargets->count() > 1 || ($transferTargets->count() === 1 && $e->branch_id !== $transferTargets->first()->id))
+                  <details class="disclosure" style="margin-top:0.75rem">
+                    <summary><x-icon name="transfer" :size="14" /> Điều chuyển chi nhánh</summary>
+                    <form method="post" action="{{ route('admin.employees.transfer', $e) }}" style="margin-top:0.65rem">
+                      @csrf
+                      <div class="form-grid">
+                        <div class="field">
+                          <label>Chi nhánh chuyển đến *</label>
+                          <select name="to_branch_id" required>
+                            @foreach($transferTargets as $tb)
+                              @if($tb->id !== $e->branch_id)
+                                <option value="{{ $tb->id }}">{{ $tb->code }} – {{ $tb->name }}</option>
+                              @endif
+                            @endforeach
+                          </select>
+                        </div>
+                        <div class="field">
+                          <label>Ca làm mới (tùy chọn)</label>
+                          <select name="to_shift_id">
+                            <option value="">Theo ca mặc định CN mới</option>
+                            @foreach($shifts as $sh)
+                              <option value="{{ $sh->id }}">{{ $sh->name }} @if($sh->branch)({{ $sh->branch->code }})@endif</option>
+                            @endforeach
+                          </select>
+                        </div>
+                        <div class="field">
+                          <label>Ngày hiệu lực *</label>
+                          <input type="date" name="effective_date" required value="{{ $todayVn }}">
+                        </div>
+                        <div class="field">
+                          <label>Ghi chú điều chuyển</label>
+                          <input name="note" maxlength="500" placeholder="VD: Điều chuyển tăng cường chi nhánh mới">
+                        </div>
+                      </div>
+                      <div style="margin-top:0.65rem"><button type="submit" class="btn-sm">Xác nhận điều chuyển</button></div>
+                    </form>
+                    @if($e->transfers->isNotEmpty())
+                      <ul class="muted small" style="margin:0.65rem 0 0;padding-inline-start:1.2rem">
+                        @foreach($e->transfers as $tr)
+                          <li>{{ $tr->effective_date->format('d/m/Y') }}: {{ $tr->fromBranch?->code ?? '—' }} → <strong>{{ $tr->toBranch?->code }}</strong>@if($tr->note) ({{ $tr->note }})@endif</li>
+                        @endforeach
+                      </ul>
+                    @endif
+                  </details>
+                @endif
 
                 <details class="disclosure" style="margin-top:0.75rem">
                   <summary>Phân ca theo giai đoạn (lưu lịch sử)</summary>
@@ -186,7 +310,7 @@
             </td>
           </tr>
         @empty
-          <tr><td colspan="5" class="empty-state">Chưa có nhân viên nào. Bạn có thể tạo ngay ở trên hoặc tạo trực tiếp trên app Android.</td></tr>
+          <tr><td colspan="5" class="empty-state">Chưa có nhân viên nào trong phạm vi lọc.</td></tr>
         @endforelse
       </tbody>
     </table>

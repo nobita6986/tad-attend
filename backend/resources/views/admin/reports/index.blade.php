@@ -19,10 +19,10 @@
     <p class="page-subtitle">Tính lượt đầu tiên (Vào) và lượt cuối cùng (Ra) đã duyệt trong khung ca (±4h). Hỗ trợ cả thiết bị chấm công chung lẫn cổng tách riêng.</p>
   </div>
   <div class="page-actions">
-    <a class="btn btn-accent" href="{{ route('admin.reports.detail', ['from'=>$from, 'to'=>$to, 'employee_id'=>$employeeId]) }}">
+    <a class="btn btn-accent" href="{{ route('admin.reports.detail', array_filter(['from'=>$from, 'to'=>$to, 'region'=>$selectedRegion, 'branch_id'=>$selectedBranchId, 'employee_id'=>$employeeId])) }}">
       <x-icon name="download" :size="16" /> Excel chi tiết
     </a>
-    <a class="btn btn-outline" href="{{ route('admin.reports.summary', ['from'=>$from, 'to'=>$to, 'employee_id'=>$employeeId]) }}">
+    <a class="btn btn-outline" href="{{ route('admin.reports.summary', array_filter(['from'=>$from, 'to'=>$to, 'region'=>$selectedRegion, 'branch_id'=>$selectedBranchId, 'employee_id'=>$employeeId])) }}">
       <x-icon name="download" :size="16" /> Excel tổng hợp
     </a>
   </div>
@@ -38,6 +38,28 @@
       <label for="rep-to">Đến ngày</label>
       <input id="rep-to" type="date" name="to" required value="{{ $to }}">
     </div>
+    @if(auth()->user()->hasGlobalBranchAccess() || auth()->user()->effectiveRole() === 'regional_accountant')
+      <div class="field">
+        <label for="rep-region">Miền</label>
+        <select id="rep-region" name="region">
+          <option value="">Tất cả miền</option>
+          @foreach($regions as $rKey => $rLabel)
+            <option value="{{ $rKey }}" @selected($selectedRegion === $rKey)>{{ $rLabel }}</option>
+          @endforeach
+        </select>
+      </div>
+    @endif
+    @if($branches->count() > 1)
+      <div class="field">
+        <label for="rep-branch">Chi nhánh</label>
+        <select id="rep-branch" name="branch_id">
+          <option value="">Tất cả chi nhánh</option>
+          @foreach($branches as $b)
+            <option value="{{ $b->id }}" @selected($selectedBranchId == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+          @endforeach
+        </select>
+      </div>
+    @endif
     <div class="field">
       <label for="rep-emp">Nhân viên</label>
       <select id="rep-emp" name="employee_id">
@@ -88,7 +110,7 @@
                 <span class="person-avatar">{{ $ini }}</span>
                 <div>
                   <strong>{{ $row['employee_name'] }}</strong>
-                  <div class="muted small">{{ $row['employee_code'] }}</div>
+                  <div class="muted small">{{ $row['employee_code'] }} · {{ $row['branch_name'] ?? 'Chưa gán' }}</div>
                 </div>
               </div>
             </td>

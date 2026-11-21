@@ -10,14 +10,25 @@
 <div class="page-header">
   <div>
     <h1>Tổng quan chấm công</h1>
-    <p class="page-subtitle">Cập nhật theo thời gian thực · Hôm nay {{ now($tz)->format('d/m/Y') }} (UTC+7)</p>
+    <p class="page-subtitle">Phạm vi: <strong>{{ auth()->user()->scopeLabel() }}</strong> · Hôm nay {{ now($tz)->format('d/m/Y') }} (UTC+7)</p>
   </div>
   <div class="page-actions">
+    @if($branches->count() > 1)
+      <form method="get" style="display:flex;gap:8px;align-items:center;margin:0">
+        <select name="branch_id" onchange="this.form.submit()" aria-label="Lọc theo chi nhánh" style="min-block-size:38px;padding:4px 10px">
+          <option value="">Tất cả chi nhánh ({{ $branches->count() }})</option>
+          @foreach($branches as $b)
+            <option value="{{ $b->id }}" @selected($selectedBranchId == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+          @endforeach
+        </select>
+      </form>
+    @endif
     @if(auth()->user()->isSystemAdmin())
+      <a class="btn btn-outline" href="{{ route('admin.branches.index') }}"><x-icon name="building" :size="16" /> Chi nhánh</a>
       <a class="btn btn-outline" href="{{ route('admin.devices.index') }}"><x-icon name="device" :size="16" /> Thiết bị</a>
     @endif
     <a class="btn btn-outline" href="{{ route('admin.employees.index') }}"><x-icon name="plus" :size="16" /> Nhân viên</a>
-    <a class="btn" href="{{ route('admin.reports.index') }}"><x-icon name="chart" :size="16" /> Xem báo cáo</a>
+    <a class="btn" href="{{ route('admin.reports.index', array_filter(['branch_id' => $selectedBranchId])) }}"><x-icon name="chart" :size="16" /> Xem báo cáo</a>
   </div>
 </div>
 

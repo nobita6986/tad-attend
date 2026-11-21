@@ -243,10 +243,17 @@ class DeviceController extends Controller
 
     public function device(Request $request): JsonResponse
     {
-        $device = $this->deviceFor($request);
+        $device = $this->deviceFor($request)->load('branch');
         return response()->json([
             'device_id' => $device->id, 'name' => $device->name, 'direction' => $device->direction,
             'hardware_id' => $device->hardware_id,
+            'branch' => $device->branch ? [
+                'id' => $device->branch->id,
+                'code' => $device->branch->code,
+                'name' => $device->branch->name,
+                'region' => $device->branch->region,
+                'active' => $device->branch->active,
+            ] : null,
             'server_time' => now('UTC')->toIso8601String(),
             'model_id' => config('attendance.model_id'),
             'model_version' => config('attendance.model_version'),
@@ -262,9 +269,19 @@ class DeviceController extends Controller
             'model_version' => ['required', 'string', 'max:40'],
         ]);
         abort_unless($this->isConfiguredModel($data['model_id'], $data['model_version']), 409, 'Mô hình không đúng hoặc chưa cấu hình.');
+        $device = $this->deviceFor($request)->load('branch');
+        if ($device->branch && !$device->branch->active) {
+            abort(403, 'Chi nhánh của thiết bị này đang bị vô hiệu hóa.');
+        }
+
         $templates = FaceTemplate::query()
             ->where('active', true)->where('model_id', $data['model_id'])->where('model_version', $data['model_version'])
-            ->whereHas('employee', fn ($q) => $q->where('active', true)->whereNotNull('consent_at'))
+            ->whereHas('employee', function ($q) use ($device) {
+                $q->where('active', true)->whereNotNull('consent_at');
+                if ($device->branch_id !== null) {
+                    $q->where('branch_id', $device->branch_id);
+                }
+            })
             ->with('employee')->get();
         return response()->json(['employees' => $templates->map(fn ($t) => [
             'id' => $t->employee->id, 'code' => $t->employee->code,
@@ -310,10 +327,18 @@ class DeviceController extends Controller
     {
         $modelId = (string) config('attendance.model_id');
         $modelVersion = (string) config('attendance.model_version');
+        $device = $this->deviceFor($request)->load('branch');
+        if ($device->branch && !$device->branch->active) {
+            abort(403, 'Chi nhánh của thiết bị này đang bị vô hiệu hóa.');
+        }
 
-        $shifts = Shift::orderBy('name')->get(['id', 'code', 'name', 'starts_at', 'ends_at']);
+        $shifts = Shift::query()
+            ->when($device->branch_id !== null, fn ($q) => $q->where(fn ($q2) => $q2->whereNull('branch_id')->orWhere('branch_id', $device->branch_id)))
+            ->orderBy('name')
+            ->get(['id', 'code', 'name', 'starts_at', 'ends_at']);
         $employees = Employee::query()
             ->where('active', true)
+            ->when($device->branch_id !== null, fn ($q) => $q->where('branch_id', $device->branch_id))
             ->with(['templates' => fn ($q) => $q->where('active', true)->where('model_id', $modelId)->where('model_version', $modelVersion)])
             ->orderBy('code')
             ->get();
@@ -364,9 +389,13 @@ class DeviceController extends Controller
 
         $nowUtc = now('UTC');
         $todayVn = CarbonImmutable::now(config('attendance.timezone'))->toDateString();
-        $deviceId = $this->deviceFor($request)->id;
+        $device = $this->deviceFor($request)->load('branch');
+        if ($device->branch && !$device->branch->active) {
+            abort(403, 'Chi nhánh của thiết bị này đang bị vô hiệu hóa.');
+        }
+        $deviceId = $device->id;
 
-        $employee = DB::transaction(function () use ($data, $embedding, $nowUtc, $todayVn, $deviceId) {
+        $employee = DB::transaction(function () use ($data, $embedding, $nowUtc, $todayVn, $device, $deviceId) {
             if ($data['mode'] === 'create') {
                 $code = strtoupper(trim((string) $data['code']));
                 $fullName = trim((string) $data['full_name']);
@@ -376,12 +405,14 @@ class DeviceController extends Controller
                 if (Employee::where('code', $code)->exists()) {
                     throw ValidationException::withMessages(['code' => "Mã nhân viên {$code} đã tồn tại trên hệ thống."]);
                 }
+                $shiftId = $data['shift_id'] ?? $device->branch?->default_shift_id;
                 $employee = Employee::create([
+                    'branch_id' => $device->branch_id,
                     'code' => $code,
                     'full_name' => $fullName,
                     'gender' => $data['gender'] ?? null,
                     'department' => isset($data['department']) && trim((string) $data['department']) !== '' ? trim((string) $data['department']) : null,
-                    'shift_id' => $data['shift_id'] ?? null,
+                    'shift_id' => $shiftId,
                     'employed_from' => $todayVn,
                     'active' => true,
                     'consent_at' => $nowUtc,
@@ -391,6 +422,9 @@ class DeviceController extends Controller
             } else {
                 $employee = Employee::whereKey($data['employee_id'])->lockForUpdate()->firstOrFail();
                 abort_unless($employee->active, 422, 'Nhân viên đang bị tạm khóa.');
+                if ($device->branch_id !== null && $employee->branch_id !== $device->branch_id) {
+                    abort(422, 'Nhân viên không thuộc chi nhánh của thiết bị này.');
+                }
                 if (!$employee->consent_at) {
                     $employee->update(['consent_at' => $nowUtc, 'consent_method' => 'electronic_consent']);
                 }
@@ -439,7 +473,10 @@ class DeviceController extends Controller
             'offline' => ['required', 'boolean'],
             'image' => ['required', 'image', 'mimes:jpeg,jpg', 'max:250', 'dimensions:max_width=1600,max_height=1600'],
         ]);
-        $device = $this->deviceFor($request);
+        $device = $this->deviceFor($request)->load('branch');
+        if ($device->branch && !$device->branch->active) {
+            abort(403, 'Chi nhánh của thiết bị này đang bị vô hiệu hóa.');
+        }
         // Do not accept unconfigured or uncalibrated model deployments.
         abort_unless($this->isConfiguredModel($data['model_id'], $data['model_version']), 409, 'Mô hình chưa cấu hình hoặc phiên bản không khớp.');
         abort_unless((float) $data['match_score'] >= (float) config('attendance.min_score'), 422, 'Độ tương đồng không đạt ngưỡng.');
@@ -472,6 +509,9 @@ class DeviceController extends Controller
                     return $repeat;
                 }
                 abort_unless($employee->active && $employee->consent_at, 422, 'Nhân viên chưa được phép chấm công sinh trắc.');
+                if ($device->branch_id !== null && $employee->branch_id !== $device->branch_id) {
+                    abort(422, 'Nhân viên không thuộc chi nhánh của thiết bị chấm công này.');
+                }
                 $hasTemplate = FaceTemplate::where('employee_id', $employee->id)->where('active', true)
                     ->where('model_id', $data['model_id'])->where('model_version', $data['model_version'])->exists();
                 abort_unless($hasTemplate, 422, 'Không có mẫu khuôn mặt hợp lệ cho phiên bản này.');
@@ -486,7 +526,8 @@ class DeviceController extends Controller
                 abort_if($recent, 409, 'Chưa qua thời gian chống chấm lặp.');
                 return AttendanceEvent::create([
                     'event_uuid' => $data['event_uuid'], 'employee_id' => $employee->id,
-                    'device_id' => $device->id, 'captured_at' => $captured, 'received_at' => $now,
+                    'device_id' => $device->id, 'branch_id' => $device->branch_id ?? $employee->branch_id,
+                    'captured_at' => $captured, 'received_at' => $now,
                     'direction' => $device->direction, 'review_state' => $needsReview ? 'pending_review' : 'accepted',
                     'is_offline' => $offline, 'match_score' => $data['match_score'],
                     'liveness_method' => $data['liveness_method'], 'model_id' => $data['model_id'],

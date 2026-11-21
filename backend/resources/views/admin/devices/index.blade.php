@@ -54,6 +54,12 @@
                     placeholder="Tên thiết bị / vị trí"
                     style="min-block-size:36px;padding:4px 10px;width:210px"
                   >
+                  <select name="branch_id" aria-label="Chi nhánh thiết bị" style="min-block-size:36px;padding:4px 8px;width:auto">
+                    <option value="">Chưa gắn chi nhánh</option>
+                    @foreach($branches as $b)
+                      <option value="{{ $b->id }}" @selected($pending->branch_id == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+                    @endforeach
+                  </select>
                   <select name="direction" aria-label="Chế độ thiết bị" style="min-block-size:36px;padding:4px 8px;width:auto">
                     <option value="both" @selected($pending->direction === 'both')>Vào / Ra (chung)</option>
                     <option value="in" @selected($pending->direction === 'in')>Chỉ vào (in)</option>
@@ -119,6 +125,15 @@
     @csrf
     <div class="form-grid">
       <div class="field">
+        <label for="device-branch">Chi nhánh đặt máy</label>
+        <select id="device-branch" name="branch_id">
+          <option value="">Chưa gắn chi nhánh</option>
+          @foreach($branches as $b)
+            <option value="{{ $b->id }}" @selected(old('branch_id') == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+          @endforeach
+        </select>
+      </div>
+      <div class="field">
         <label for="device-name">Tên thiết bị / vị trí *</label>
         <input id="device-name" required name="name" maxlength="120" value="{{ old('name') }}" placeholder="Ví dụ: Cổng chính (Android)">
       </div>
@@ -149,8 +164,18 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
 </section>
 
 <section class="card">
-  <div class="card-head">
+  <div class="card-head" style="flex-wrap:wrap;gap:10px">
     <h2><x-icon name="device" :size="18" /> Danh sách thiết bị ({{ $devices->total() }})</h2>
+    @if($branches->isNotEmpty())
+      <form method="get" style="display:flex;gap:8px;align-items:center;margin:0">
+        <select name="branch_id" onchange="this.form.submit()" aria-label="Lọc thiết bị theo chi nhánh" style="min-block-size:34px;padding:4px 10px">
+          <option value="">Tất cả chi nhánh</option>
+          @foreach($branches as $b)
+            <option value="{{ $b->id }}" @selected($selectedBranchId == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+          @endforeach
+        </select>
+      </form>
+    @endif
   </div>
 
   <div tabindex="0" role="region" aria-label="Bảng danh sách thiết bị" class="table-wrapper">
@@ -169,6 +194,9 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
           <tr>
             <td data-label="Thiết bị">
               <strong>{{ $device->name }}</strong>
+              @if($device->branch)
+                <div style="margin-top:2px"><x-badge variant="info">{{ $device->branch->code }} – {{ $device->branch->name }}</x-badge></div>
+              @endif
               @if($device->device_model)
                 <div class="muted small">{{ $device->device_model }}</div>
               @endif
@@ -178,6 +206,12 @@ php artisan devices:issue 'Cổng ra 1' --direction=out</pre>
               @if($device->active)
                 <form method="post" action="{{ route('admin.devices.update', $device) }}" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
                   @csrf @method('PUT')
+                  <select name="branch_id" aria-label="Chi nhánh của {{ $device->name }}" style="min-block-size:34px;padding:4px 8px;width:auto">
+                    <option value="">Chưa gắn CN</option>
+                    @foreach($branches as $b)
+                      <option value="{{ $b->id }}" @selected($device->branch_id == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+                    @endforeach
+                  </select>
                   <input
                     name="hardware_id"
                     value="{{ $device->hardware_id }}"

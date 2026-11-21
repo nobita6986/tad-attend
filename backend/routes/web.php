@@ -1,5 +1,6 @@
 <?php
 use App\Http\Controllers\Admin\AuthController;
+use App\Http\Controllers\Admin\BranchController;
 use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\EmployeeController;
 use App\Http\Controllers\Admin\ShiftController;
@@ -18,6 +19,8 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin.only'])->grou
     Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
     Route::post('/employees', [EmployeeController::class, 'store'])->name('employees.store');
     Route::put('/employees/{employee}', [EmployeeController::class, 'update'])->name('employees.update');
+    Route::post('/employees/{employee}/toggle-active', [EmployeeController::class, 'toggleActive'])->name('employees.toggle-active');
+    Route::post('/employees/{employee}/transfer', [EmployeeController::class, 'transfer'])->name('employees.transfer');
     Route::post('/employees/{employee}/consent', [EmployeeController::class, 'consent'])->name('employees.consent');
     Route::post('/employees/{employee}/revoke-consent', [EmployeeController::class, 'revokeConsent'])->name('employees.revoke-consent');
     Route::post('/employees/{employee}/assign-shift', [EmployeeController::class, 'assignShift'])->name('employees.assign-shift');
@@ -33,6 +36,11 @@ Route::prefix('admin')->name('admin.')->middleware(['auth', 'admin.only'])->grou
     Route::get('/reports/export-summary', [ReportController::class, 'exportSummary'])->name('reports.summary');
 
     Route::middleware('system.admin')->group(function () {
+        Route::get('/branches', [BranchController::class, 'index'])->name('branches.index');
+        Route::post('/branches', [BranchController::class, 'store'])->name('branches.store');
+        Route::put('/branches/{branch}', [BranchController::class, 'update'])->name('branches.update');
+        Route::post('/branches/{branch}/toggle-active', [BranchController::class, 'toggleActive'])->name('branches.toggle-active');
+
         Route::get('/devices', [DeviceAdminController::class, 'index'])->name('devices.index');
         Route::post('/devices', [DeviceAdminController::class, 'store'])->name('devices.store');
         Route::put('/devices/{device}', [DeviceAdminController::class, 'update'])->name('devices.update');
