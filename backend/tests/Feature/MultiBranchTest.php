@@ -401,4 +401,38 @@ class MultiBranchTest extends TestCase
         $this->assertLessThan(20.0, $ev->distance_meters);
         $this->assertEquals(10.5, $ev->gps_accuracy_meters);
     }
+
+    public function test_device_registration_stores_gps_and_can_apply_to_branch_on_approval(): void
+    {
+        $admin = $this->makeAdmin();
+        [$hn] = $this->makeBranches();
+
+        $res = $this->postJson('/api/v1/devices/register', [
+            'hardware_id' => 'IOS-REG1-2222-3333-4444',
+            'name' => 'iPhone Lễ Tân HN',
+            'device_model' => 'iPhone (iOS 18.0)',
+            'latitude' => 20.985421,
+            'longitude' => 105.853192,
+            'gps_accuracy_meters' => 9.5,
+        ])->assertStatus(202);
+
+        $device = Device::where('hardware_id', 'IOS-REG1-2222-3333-4444')->firstOrFail();
+        $this->assertEquals(20.985421, $device->registered_latitude);
+        $this->assertEquals(105.853192, $device->registered_longitude);
+        $this->assertEquals(9.5, $device->registered_gps_accuracy_meters);
+        $this->assertSame('pending', $res->json('status'));
+
+        // Admin approves and applies registered GPS as branch HQ coordinates
+        $this->actingAs($admin)->post("/admin/devices/{$device->id}/approve", [
+            'branch_id' => $hn->id,
+            'name' => 'iPhone Lễ Tân HN',
+            'direction' => 'both',
+            'apply_gps_to_branch' => '1',
+        ])->assertRedirect('/admin/devices');
+
+        $hn->refresh();
+        $this->assertEquals(20.985421, $hn->latitude);
+        $this->assertEquals(105.853192, $hn->longitude);
+        $this->assertSame(150, $hn->allowed_radius_meters);
+    }
 }

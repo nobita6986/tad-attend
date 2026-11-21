@@ -13,6 +13,9 @@ class Device extends Model
         'name',
         'hardware_id',
         'device_model',
+        'registered_latitude',
+        'registered_longitude',
+        'registered_gps_accuracy_meters',
         'direction',
         'token_hash',
         'active',
@@ -23,6 +26,9 @@ class Device extends Model
     protected $hidden = ['token_hash'];
     protected $casts = [
         'active' => 'boolean',
+        'registered_latitude' => 'float',
+        'registered_longitude' => 'float',
+        'registered_gps_accuracy_meters' => 'float',
         'last_seen_at' => 'datetime',
         'requested_at' => 'datetime',
     ];

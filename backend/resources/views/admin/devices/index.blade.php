@@ -40,6 +40,18 @@
                 @if($pending->device_model)
                   <div class="muted small">{{ $pending->device_model }}</div>
                 @endif
+                @if($pending->registered_latitude !== null && $pending->registered_longitude !== null)
+                  <div class="muted small" style="margin-top:3px">
+                    📍 <a href="https://maps.google.com/?q={{ $pending->registered_latitude }},{{ $pending->registered_longitude }}" target="_blank" rel="noopener noreferrer" style="color:var(--color-primary);text-decoration:underline">
+                      {{ number_format($pending->registered_latitude, 6, '.', '') }}, {{ number_format($pending->registered_longitude, 6, '.', '') }}
+                    </a>
+                    @if($pending->registered_gps_accuracy_meters !== null)
+                      (±{{ round($pending->registered_gps_accuracy_meters) }} m)
+                    @endif
+                  </div>
+                @else
+                  <div class="muted small" style="margin-top:3px;color:#B45309">⚠ Chưa gửi tọa độ GPS lúc đăng ký</div>
+                @endif
                 <div class="muted small">Gửi lúc: {{ ($pending->requested_at ?? $pending->created_at)?->timezone($tz)->format('d/m/Y H:i:s') }}</div>
               </td>
               <td data-label="Tên &amp; Chế độ">
@@ -65,6 +77,12 @@
                     <option value="in" @selected($pending->direction === 'in')>Chỉ vào (in)</option>
                     <option value="out" @selected($pending->direction === 'out')>Chỉ ra (out)</option>
                   </select>
+                  @if($pending->registered_latitude !== null && $pending->registered_longitude !== null)
+                    <label style="display:flex;align-items:center;gap:5px;font-size:0.8rem;cursor:pointer">
+                      <input type="checkbox" name="apply_gps_to_branch" value="1">
+                      <span>Lưu làm tọa độ trụ sở CN</span>
+                    </label>
+                  @endif
                 </form>
               </td>
               <td data-label="Phê duyệt">

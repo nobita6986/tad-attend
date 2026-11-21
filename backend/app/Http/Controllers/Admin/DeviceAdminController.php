@@ -124,6 +124,7 @@ class DeviceAdminController extends Controller
             'branch_id' => ['nullable', 'integer', 'exists:branches,id'],
             'name' => ['nullable', 'string', 'max:120'],
             'direction' => ['nullable', 'in:both,in,out'],
+            'apply_gps_to_branch' => ['nullable', 'boolean'],
         ]);
 
         $name = isset($data['name']) && trim((string) $data['name']) !== ''
@@ -142,6 +143,17 @@ class DeviceAdminController extends Controller
             'active' => true,
             'token_hash' => hash('sha256', bin2hex(random_bytes(32))),
         ]);
+
+        if ($request->boolean('apply_gps_to_branch') && $branchId && $device->registered_latitude !== null && $device->registered_longitude !== null) {
+            $branch = Branch::find($branchId);
+            if ($branch) {
+                $branch->update([
+                    'latitude' => $device->registered_latitude,
+                    'longitude' => $device->registered_longitude,
+                    'allowed_radius_meters' => $branch->allowed_radius_meters ?? 150,
+                ]);
+            }
+        }
 
         AuditLog::create([
             'user_id' => $request->user()->id,
