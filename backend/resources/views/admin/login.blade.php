@@ -3,7 +3,9 @@
 @section('content')
 <div class="auth-shell">
   <section class="auth-card">
-    <div class="auth-badge"><x-icon name="shield" :size="26" /></div>
+    <div style="margin-bottom:1rem">
+      <img src="{{ asset('images/tad-logo.png') }}" alt="TAD Attend" style="height:46px;width:auto;display:block">
+    </div>
     <h1>Đăng nhập quản trị</h1>
     <p class="muted" style="margin:0 0 1.4rem">Chỉ tài khoản được cấp quyền mới có thể xem và quản lý dữ liệu chấm công sinh trắc.</p>
 

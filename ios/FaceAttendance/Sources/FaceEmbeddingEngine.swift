@@ -5,8 +5,8 @@ import Foundation
 import ImageIO
 import UIKit
 import Vision
-#if canImport(OnnxRuntimeBindings)
-import OnnxRuntimeBindings
+#if canImport(onnxruntime_objc)
+import onnxruntime_objc
 #endif
 
 struct FaceResult {
@@ -32,7 +32,7 @@ final class FaceEmbeddingEngine {
         CGPoint(x: 70.7299, y: 92.2041), // image-right mouth corner
     ]
 
-    #if canImport(OnnxRuntimeBindings)
+    #if canImport(onnxruntime_objc)
     private var ortEnv: ORTEnv?
     private var ortSession: ORTSession?
     private var ortInputName: String?
@@ -46,7 +46,7 @@ final class FaceEmbeddingEngine {
     init(targetDimensions: Int = 128) {
         self.targetDimensions = max(16, targetDimensions)
 
-        #if canImport(OnnxRuntimeBindings)
+        #if canImport(onnxruntime_objc)
         if let onnxPath = Bundle.main.path(forResource: "face_recognition_sface_2021dec", ofType: "onnx"),
            let env = try? ORTEnv(loggingLevel: .warning),
            let opts = try? ORTSessionOptions() {
@@ -74,7 +74,7 @@ final class FaceEmbeddingEngine {
     }
 
     var usesSFaceONNX: Bool {
-        #if canImport(OnnxRuntimeBindings)
+        #if canImport(onnxruntime_objc)
         return ortSession != nil
         #else
         return false
@@ -112,7 +112,7 @@ final class FaceEmbeddingEngine {
         let croppedCI = ciImage.cropped(to: cropRect)
 
         let rawVector: [Double]
-        #if canImport(OnnxRuntimeBindings)
+        #if canImport(onnxruntime_objc)
         if let session = ortSession, let inputName = ortInputName, let outputName = ortOutputName {
             let alignedRGBA = try alignFaceTo112RGBA(cgImage: cgImage, face: face)
             rawVector = try extractSFaceONNX(
@@ -267,7 +267,7 @@ final class FaceEmbeddingEngine {
 
     // MARK: - SFace ONNX Inference
 
-    #if canImport(OnnxRuntimeBindings)
+    #if canImport(onnxruntime_objc)
     private func extractSFaceONNX(
         session: ORTSession,
         inputName: String,

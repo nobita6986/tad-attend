@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>@yield('title', 'Quản trị') · TAD Attend</title>
+  <link rel="icon" type="image/png" href="{{ asset('favicon.png') }}">
+  <link rel="apple-touch-icon" href="{{ asset('apple-touch-icon.png') }}">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -57,7 +59,7 @@
   <div class="app-shell">
     <header class="mobile-header" id="mobile-header">
       <a class="brand" href="{{ route('admin.dashboard') }}">
-        <span class="brand-mark"><x-icon name="scan" :size="19" /></span>
+        <img src="{{ asset('images/tad-logo.png') }}" alt="TAD Attend" style="height:30px;width:auto;display:block">
         <span>TAD Attend</span>
       </a>
       <button
@@ -75,7 +77,7 @@
     <aside id="app-sidebar" class="app-sidebar" popover="auto">
       <div class="sidebar-top">
         <a class="brand" href="{{ route('admin.dashboard') }}">
-          <span class="brand-mark"><x-icon name="scan" :size="20" /></span>
+          <img src="{{ asset('images/tad-logo.png') }}" alt="TAD Attend" style="height:34px;width:auto;display:block">
           <div>
             <span class="brand-title">TAD Attend</span>
             <span class="brand-caption">Quản trị chấm công</span>

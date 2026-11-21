@@ -3,10 +3,6 @@ options:
   bundleIdPrefix: vn.tad
   deploymentTarget:
     iOS: '16.0'
-packages:
-  OnnxRuntime:
-    url: https://github.com/microsoft/onnxruntime-swift-package-manager
-    from: 1.19.0
 settings:
   base:
     SWIFT_VERSION: '5.0'
@@ -33,9 +29,6 @@ targets:
     sources:
       - path: FaceAttendance/Sources
       - path: FaceAttendance/Resources
-    dependencies:
-      - package: OnnxRuntime
-        product: onnxruntime
     settings:
       base:
         INFOPLIST_KEY_UIRequiredDeviceCapabilities: 'arm64'

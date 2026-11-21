@@ -203,14 +203,17 @@ struct ContentView: View {
         VStack(spacing: 14) {
             // Compact HIG top header
             HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(TADTheme.brand)
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "faceid")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
+                Image("TADLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 30)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color(.separator).opacity(0.25), lineWidth: 0.5)
+                    )
                 VStack(alignment: .leading, spacing: 2) {
                     Text("TAD Attend")
                         .font(.headline)

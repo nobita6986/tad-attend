@@ -35,6 +35,7 @@ concurrency:
 
 env:
   PROJECT: FaceAttendance.xcodeproj
+  WORKSPACE: FaceAttendance.xcworkspace
   SCHEME: FaceAttendance
   APP_NAME: FaceAttendance
   SFACE_URL: https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
@@ -105,12 +106,13 @@ jobs:
           fi
           ls -lh "$MODEL"
 
-      - name: Install XcodeGen & generate Xcode project
+      - name: Install XcodeGen, generate project & install CocoaPods (ONNX Runtime)
         working-directory: ios
         run: |
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcodegen generate
-          xcodebuild -list -project "$PROJECT"
+          pod install --repo-update
+          xcodebuild -list -workspace "$WORKSPACE"
 
       - name: Build Release (unsigned, generic iOS device)
         working-directory: ios
@@ -118,7 +120,7 @@ jobs:
           set -o pipefail
           mkdir -p build
           xcodebuild build \
-            -project "$PROJECT" \
+            -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
@@ -218,7 +220,7 @@ jobs:
           </plist>
           EOF
           xcodebuild archive \
-            -project "$PROJECT" \
+            -workspace "$WORKSPACE" \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
