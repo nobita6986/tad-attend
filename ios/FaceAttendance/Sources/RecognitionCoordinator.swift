@@ -1,52 +1,118 @@
 import ARKit
 import Foundation
 import SwiftUI
+import UIKit
+
+struct DirectEnrollmentRequest {
+    let mode: String // "existing" | "create"
+    let employeeID: Int?
+    let code: String?
+    let fullName: String?
+    let department: String?
+    let shiftID: Int?
+}
 
 @MainActor
 final class RecognitionCoordinator: ObservableObject {
     enum Mode { case kiosk, enrollment }
-    @Published var message = "Cấu hình máy chủ để bắt đầu."
+
+    @Published var message = "Đang kết nối máy chủ chấm công..."
     @Published var headline = "Sẵn sàng"
     @Published var deviceInfo: DeviceInfo?
+    @Published var enrollmentOptions: EnrollmentOptionsResponse?
     @Published var enrollmentCount = 0
     @Published var isRunning = false
     @Published var lastReceipt: AttendanceReceipt?
+    @Published var registrationStatus = ""
+    @Published var pendingOfflineCount = 0
+    @Published var isPollingApproval = false
 
+    let hardwareID = HardwareIDStore.loadOrCreate()
     let tracker = FaceTrackingService()
+    let locationService = LocationService()
+
     private let api = APIClient()
+    private let offlineStore = OfflineQueueStore()
     private var engine: FaceEmbeddingEngine?
     private var roster: [EnrolledPerson] = []
     private var mode: Mode = .kiosk
-    private var enrollmentTicket = ""
+    private var activeEnrollRequest: DirectEnrollmentRequest?
     private var samples: [[Double]] = []
     private var working = false
     private var lastAnalysis = Date.distantPast
-    private var sawLeft = false, sawRight = false
+    private var sawTurn = false
     private var armed = true
     private var absentSince: Date?
+    private var autoResetTask: Task<Void, Never>?
+    private var pollTask: Task<Void, Never>?
 
     init() {
+        pendingOfflineCount = offlineStore.all().count
         tracker.onFrame = { [weak self] buffer, yaw, hasFace in
             Task { @MainActor in self?.onFrame(buffer: buffer, yaw: yaw, hasFace: hasFace) }
         }
     }
 
+    var deviceModelName: String {
+        "\(UIDevice.current.model) (iOS \(UIDevice.current.systemVersion))"
+    }
+
+    var currentDistanceMeters: Double? {
+        locationService.distanceTo(branch: deviceInfo?.branch)
+    }
+
+    var isOutsideGeofence: Bool {
+        guard let branch = deviceInfo?.branch, branch.hasEnforcedGeofence,
+              let limit = branch.allowed_radius_meters,
+              let dist = currentDistanceMeters else { return false }
+        return dist > Double(limit)
+    }
+
     func connect() async {
-        tracker.stop(); isRunning = false; lastReceipt = nil
+        stopPolling()
+        tracker.stop()
+        locationService.start()
+        isRunning = false
+        lastReceipt = nil
+
+        // If no token yet, try automatic activation by Hardware ID first
+        if DeviceTokenStore.load()?.isEmpty ?? true {
+            do {
+                let act = try await api.activateDevice(hardwareID: hardwareID, deviceModel: deviceModelName)
+                if act.status == "approved", let tok = act.token, !tok.isEmpty {
+                    DeviceTokenStore.save(tok)
+                    registrationStatus = "Đã tự động kích hoạt thiết bị."
+                } else {
+                    registrationStatus = act.message ?? "Thiết bị chưa được duyệt."
+                    headline = "Chưa kết nối thiết bị"
+                    message = registrationStatus
+                    return
+                }
+            } catch {
+                headline = "Chưa kết nối thiết bị"
+                message = error.localizedDescription
+                return
+            }
+        }
+
         do {
-            // Fail closed: no model = no attendance.
-            engine = try FaceEmbeddingEngine()
             let info = try await api.deviceInfo()
             guard info.model_id != "UNCONFIGURED", info.model_version != "UNCONFIGURED" else {
                 throw AppError.notConfigured
             }
+            let dims = info.embedding_dimensions ?? 192
+            engine = FaceEmbeddingEngine(targetDimensions: dims)
             let people = try await api.roster(modelID: info.model_id, version: info.model_version)
-            deviceInfo = info; roster = people; mode = .kiosk
+            deviceInfo = info
+            roster = people
+            mode = .kiosk
             resetChallenge()
             try tracker.start()
             isRunning = true
-            headline = "Chấm công tại \(info.name)"
-            message = "Đưa một khuôn mặt vào khung, quay đầu theo hướng dẫn. Đã đồng bộ \(people.count) nhân viên."
+            let branchLabel = info.branch.map { " · \($0.name)" } ?? ""
+            headline = "\(info.name)\(branchLabel)"
+            message = "Đưa khuôn mặt vào khung và quay nhẹ đầu. Đã đồng bộ \(people.count) nhân viên."
+            await flushOfflineQueue()
         } catch {
             engine = nil
             headline = "Chưa thể chấm công"
@@ -54,61 +120,175 @@ final class RecognitionCoordinator: ObservableObject {
         }
     }
 
-    func beginEnrollment(ticket: String) async {
-        guard isRunning else { message = "Hãy kết nối server trước."; return }
-        guard !ticket.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { message = "Nhập mã đăng ký từ quản trị."; return }
+    func requestDeviceRegistration(deviceName: String?) async {
+        stopPolling()
+        do {
+            let res = try await api.registerDevice(hardwareID: hardwareID, name: deviceName, deviceModel: deviceModelName)
+            registrationStatus = res.message ?? res.status
+            if res.status == "approved", let tok = res.token, !tok.isEmpty {
+                DeviceTokenStore.save(tok)
+                await connect()
+            } else if res.status == "pending" {
+                startApprovalPolling()
+            }
+        } catch {
+            registrationStatus = error.localizedDescription
+        }
+    }
+
+    func startApprovalPolling() {
+        stopPolling()
+        isPollingApproval = true
+        pollTask = Task {
+            for _ in 0..<60 {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if Task.isCancelled { break }
+                if let res = try? await api.activateDevice(hardwareID: hardwareID, deviceModel: deviceModelName) {
+                    if res.status == "approved", let tok = res.token, !tok.isEmpty {
+                        DeviceTokenStore.save(tok)
+                        registrationStatus = "Quản trị viên đã duyệt! Đang kết nối..."
+                        isPollingApproval = false
+                        await connect()
+                        return
+                    } else if res.status == "rejected" || res.status == "revoked" {
+                        registrationStatus = res.message ?? "Yêu cầu bị từ chối."
+                        isPollingApproval = false
+                        return
+                    }
+                }
+            }
+            isPollingApproval = false
+        }
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+        isPollingApproval = false
+    }
+
+    func refreshEnrollmentOptions() async {
+        do {
+            enrollmentOptions = try await api.enrollmentOptions()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    func beginDirectEnrollment(_ req: DirectEnrollmentRequest) {
+        guard isRunning else {
+            message = "Hãy kết nối máy chủ trước khi đăng ký khuôn mặt."
+            return
+        }
         mode = .enrollment
-        enrollmentTicket = ticket.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        activeEnrollRequest = req
         samples = []
         enrollmentCount = 0
-        message = "Giữ khuôn mặt rõ và di chuyển nhẹ, cần 5 mẫu."
+        message = "Nhìn thẳng vào camera và xoay nhẹ mặt, cần thu 5 mẫu."
     }
 
     func cancelEnrollment() {
-        mode = .kiosk; samples = []; enrollmentCount = 0; resetChallenge()
-        message = "Trở về chế độ chấm công."
+        mode = .kiosk
+        activeEnrollRequest = nil
+        samples = []
+        enrollmentCount = 0
+        resetChallenge()
+        message = "Đã trở về chế độ chấm công."
+    }
+
+    func flushOfflineQueue() async {
+        let queued = offlineStore.all()
+        pendingOfflineCount = queued.count
+        guard !queued.isEmpty else { return }
+        for item in queued {
+            guard let img = offlineStore.imageData(for: item) else {
+                offlineStore.remove(eventUUID: item.eventUUID)
+                continue
+            }
+            do {
+                _ = try await api.attendance(
+                    eventUUID: item.eventUUID,
+                    employeeID: item.employeeID,
+                    score: item.matchScore,
+                    image: img,
+                    modelID: item.modelID,
+                    version: item.modelVersion,
+                    capturedAt: item.capturedAt,
+                    offline: true,
+                    location: item.location
+                )
+                offlineStore.remove(eventUUID: item.eventUUID)
+            } catch {
+                // Stop flushing if network is still down
+                break
+            }
+        }
+        pendingOfflineCount = offlineStore.all().count
     }
 
     private func resetChallenge() {
-        sawLeft = false; sawRight = false; armed = true; absentSince = nil
+        sawTurn = false
+        armed = true
+        absentSince = nil
+    }
+
+    private func scheduleAutoReset() {
+        autoResetTask?.cancel()
+        autoResetTask = Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if Task.isCancelled || self.mode != .kiosk { return }
+            self.lastReceipt = nil
+            self.resetChallenge()
+            if let info = self.deviceInfo {
+                let branchLabel = info.branch.map { " · \($0.name)" } ?? ""
+                self.headline = "\(info.name)\(branchLabel)"
+            }
+            self.message = "Mời người tiếp theo đưa mặt vào khung hình."
+        }
     }
 
     private func onFrame(buffer: CVPixelBuffer, yaw: Float?, hasFace: Bool) {
         guard isRunning, !working else { return }
         if !hasFace {
             if absentSince == nil { absentSince = Date() }
-            if let since = absentSince, Date().timeIntervalSince(since) > 1.1 {
-                armed = true; sawLeft = false; sawRight = false
-                if mode == .kiosk { message = "Mời người tiếp theo. Quay đầu trái, rồi phải." }
+            if let since = absentSince, Date().timeIntervalSince(since) > 1.0 {
+                armed = true
+                sawTurn = false
+                if mode == .kiosk && lastReceipt == nil {
+                    message = "Đưa khuôn mặt vào khung, quay nhẹ đầu sang trái hoặc phải."
+                }
             }
             return
         }
         absentSince = nil
-        guard Date().timeIntervalSince(lastAnalysis) >= 0.8 else { return }
-        guard engine != nil else { return }
+        guard Date().timeIntervalSince(lastAnalysis) >= 0.65 else { return }
+        guard let activeEngine = engine else { return }
+
         if mode == .kiosk {
             guard armed else { return }
-            // This is only an interaction challenge, not guaranteed PAD.
-            guard let yaw else { message = "Không đo được hướng mặt."; return }
-            if !sawLeft {
-                message = "Vui lòng quay nhẹ sang trái."
-                if yaw < -0.20 { sawLeft = true; message = "Đúng rồi. Tiếp tục quay sang phải." }
+            // Fast 1-motion liveness: 1 gentle turn left OR right, then look straight
+            guard let yaw else {
+                message = "Không đo được hướng mặt. Giữ mặt ở giữa khung hình."
                 return
             }
-            if !sawRight {
-                if yaw > 0.20 { sawRight = true; message = "Nhìn thẳng để xác nhận." }
+            if !sawTurn {
+                if abs(yaw) > 0.18 {
+                    sawTurn = true
+                    message = "Rất tốt! Nhìn thẳng vào camera để chấm công."
+                } else {
+                    message = "Quay nhẹ đầu sang trái hoặc phải để xác nhận."
+                }
                 return
             }
-            guard abs(yaw) < 0.16 else { return }
+            guard abs(yaw) < 0.14 else { return }
             armed = false
         }
+
         lastAnalysis = Date()
         working = true
-        let engine = self.engine!
-        // Heavy Core ML/Vision work is kept away from the main thread.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let result = try engine.extract(from: buffer)
+                let result = try activeEngine.extract(from: buffer)
                 Task { @MainActor in self?.handleResult(result, capturedAt: Date()) }
             } catch {
                 Task { @MainActor in
@@ -123,63 +303,120 @@ final class RecognitionCoordinator: ObservableObject {
 
     private func handleResult(_ result: FaceResult, capturedAt: Date) {
         guard let info = deviceInfo else { working = false; return }
-        if mode == .enrollment {
+
+        if mode == .enrollment, let req = activeEnrollRequest {
             samples.append(result.embedding)
             enrollmentCount = samples.count
-            message = "Đã ghi \(samples.count)/5 mẫu..."
+            message = "Đã chụp \(samples.count)/5 mẫu..."
             guard samples.count >= 5 else { working = false; return }
-            // All samples normalized by FaceEmbeddingEngine. Normalize mean again.
-            let dimensions = result.embedding.count
-            let mean = (0..<dimensions).map { i in samples.reduce(0.0) { $0 + $1[i] } / Double(samples.count) }
+
+            let dims = result.embedding.count
+            let mean = (0..<dims).map { i in samples.reduce(0.0) { $0 + $1[i] } / Double(samples.count) }
             mode = .kiosk
+            activeEnrollRequest = nil
+
             Task {
                 do {
                     let normalized = try FaceEmbeddingEngine.normalize(mean)
-                    _ = try await api.enroll(ticket: enrollmentTicket, modelID: info.model_id,
-                                             version: info.model_version, vector: normalized)
+                    let enrolled = try await api.directEnroll(
+                        mode: req.mode,
+                        employeeID: req.employeeID,
+                        code: req.code,
+                        fullName: req.fullName,
+                        department: req.department,
+                        shiftID: req.shiftID,
+                        modelID: info.model_id,
+                        version: info.model_version,
+                        vector: normalized
+                    )
                     roster = try await api.roster(modelID: info.model_id, version: info.model_version)
+                    enrollmentOptions = try? await api.enrollmentOptions()
                     headline = "Đăng ký thành công"
-                    message = "Đã đồng bộ mẫu nhận diện mới."
-                } catch { headline = "Lỗi đăng ký"; message = error.localizedDescription }
-                samples = []; enrollmentCount = 0; working = false; resetChallenge()
+                    message = "Đã lưu khuôn mặt cho \(enrolled.code) – \(enrolled.full_name)."
+                } catch {
+                    headline = "Lỗi đăng ký"
+                    message = error.localizedDescription
+                }
+                samples = []
+                enrollmentCount = 0
+                working = false
+                resetChallenge()
             }
             return
         }
-        let matches = roster.map { person in (person, FaceEmbeddingEngine.similarity(result.embedding, person.template)) }
-            .sorted { $0.1 > $1.1 }
-        guard let top = matches.first, top.1 >= info.min_score,
-              matches.count == 1 || top.1 - matches[1].1 >= 0.08 else {
-            headline = "Chưa thể nhận diện"
-            message = "Không đủ chắc chắn để ghi công; liên hệ quản trị hoặc thử lại."
-            working = false; return
+
+        // Geofence client-side pre-check before uploading
+        let loc = locationService.currentLocation
+        if let branch = info.branch, branch.hasEnforcedGeofence, let limit = branch.allowed_radius_meters {
+            guard loc != nil else {
+                headline = "Chưa có tín hiệu GPS"
+                message = AppError.locationUnavailable.localizedDescription
+                working = false
+                scheduleAutoReset()
+                return
+            }
+            if let dist = currentDistanceMeters, dist > Double(limit) {
+                headline = "Ngoài khu vực trụ sở"
+                message = AppError.outsideGeofence(distance: dist, limit: limit, branchName: branch.name).localizedDescription
+                working = false
+                scheduleAutoReset()
+                return
+            }
         }
+
+        let matches = roster
+            .map { person in (person, FaceEmbeddingEngine.similarity(result.embedding, person.template)) }
+            .sorted { $0.1 > $1.1 }
+
+        guard let top = matches.first, top.1 >= info.min_score,
+              matches.count == 1 || top.1 - matches[1].1 >= 0.06 else {
+            headline = "Chưa nhận diện được"
+            message = "Vui lòng nhìn thẳng, đủ ánh sáng và thử lại."
+            working = false
+            scheduleAutoReset()
+            return
+        }
+
+        let eventUUID = UUID().uuidString
         Task {
             do {
-                let receipt = try await api.attendance(person: top.0, score: top.1,
-                    image: result.evidenceJPEG, modelID: info.model_id,
-                    version: info.model_version, capturedAt: capturedAt)
+                let receipt = try await api.attendance(
+                    eventUUID: eventUUID,
+                    employeeID: top.0.id,
+                    score: top.1,
+                    image: result.evidenceJPEG,
+                    modelID: info.model_id,
+                    version: info.model_version,
+                    capturedAt: capturedAt,
+                    offline: false,
+                    location: loc
+                )
                 lastReceipt = receipt
-                headline = receipt.review_state == "accepted" ? "Chấm công thành công" : "Cần quản trị kiểm tra"
-                let salutation = top.0.gender == "female" ? "chị" : "anh/chị"
-                let formatted = Self.vnDate(receipt.recorded_at)
-                message = "Xin chào \(salutation) \(receipt.employee_name)! Đã ghi nhận lúc \(formatted)."
-                // Prevent retrigger until face leaves the camera. Server also enforces cooldown.
+                headline = "Xin chào \(receipt.employee_name)"
+                message = receipt.duplicate ? "Bạn đã chấm công trước đó." : "Chấm công thành công!"
+                await flushOfflineQueue()
+            } catch let urlErr as URLError {
+                // Network failure -> queue offline with fixed event_uuid
+                _ = try? offlineStore.enqueue(
+                    eventUUID: eventUUID,
+                    employeeID: top.0.id,
+                    employeeName: top.0.full_name,
+                    matchScore: top.1,
+                    modelID: info.model_id,
+                    modelVersion: info.model_version,
+                    capturedAt: capturedAt,
+                    location: loc,
+                    imageJPEG: result.evidenceJPEG
+                )
+                pendingOfflineCount = offlineStore.all().count
+                headline = "Đã lưu tạm ngoại tuyến"
+                message = "Mất kết nối (\(urlErr.localizedDescription)). Đã lưu lượt của \(top.0.full_name) và sẽ tự gửi khi có mạng."
             } catch {
-                headline = "Không ghi được công"
+                headline = "Không thể chấm công"
                 message = error.localizedDescription
-                resetChallenge()
             }
             working = false
+            scheduleAutoReset()
         }
-    }
-
-    private static func vnDate(_ iso: String) -> String {
-        let parser = ISO8601DateFormatter()
-        guard let date = parser.date(from: iso) else { return iso }
-        let format = DateFormatter()
-        format.locale = Locale(identifier: "vi_VN")
-        format.timeZone = TimeZone(identifier: "Asia/Ho_Chi_Minh")
-        format.dateFormat = "HH:mm:ss 'ngày' dd/MM/yyyy"
-        return format.string(from: date)
     }
 }

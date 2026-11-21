@@ -57,6 +57,25 @@
           <label for="br-addr">Địa chỉ chi nhánh</label>
           <input id="br-addr" name="address" maxlength="500" value="{{ old('address') }}" placeholder="Số 111C, Ngách 299/62, Đ. Hoàng Mai, Hà Nội">
         </div>
+        <div class="field">
+          <label for="br-lat">Vĩ độ GPS trụ sở (Latitude)</label>
+          <input id="br-lat" type="number" step="0.000001" min="-90" max="90" name="latitude" value="{{ old('latitude') }}" placeholder="20.985421">
+        </div>
+        <div class="field">
+          <label for="br-lng">Kinh độ GPS trụ sở (Longitude)</label>
+          <input id="br-lng" type="number" step="0.000001" min="-180" max="180" name="longitude" value="{{ old('longitude') }}" placeholder="105.853192">
+        </div>
+        <div class="field">
+          <label for="br-radius">Bán kính cho phép (mét)</label>
+          <input id="br-radius" type="number" min="10" max="10000" name="allowed_radius_meters" value="{{ old('allowed_radius_meters', 150) }}" placeholder="150">
+        </div>
+        <div class="field" style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
+            <input type="checkbox" name="enforce_geofence" value="1" @checked(old('enforce_geofence'))>
+            <span>Bắt buộc kiểm tra vị trí GPS (chống mang máy về nhà)</span>
+          </label>
+          <button type="button" class="btn-outline btn-sm" onclick="tadFillGps('br-lat','br-lng',this)" style="width:max-content">📍 Lấy tọa độ hiện tại</button>
+        </div>
       </div>
       <div style="margin-top:1rem">
         <button type="submit"><x-icon name="plus" :size="16" /> Tạo chi nhánh</button>
@@ -98,6 +117,17 @@
               </div>
               @if($b->address)
                 <div class="muted small" style="margin-top:3px">{{ $b->address }}</div>
+              @endif
+              @if($b->hasCoordinates())
+                <div class="muted small" style="margin-top:3px">
+                  📍 <a href="https://maps.google.com/?q={{ $b->latitude }},{{ $b->longitude }}" target="_blank" rel="noopener noreferrer" style="text-decoration:underline">{{ number_format($b->latitude, 6, '.', '') }}, {{ number_format($b->longitude, 6, '.', '') }}</a>
+                  @if($b->allowed_radius_meters)
+                    · Giới hạn {{ $b->allowed_radius_meters }} m
+                  @endif
+                  @if($b->enforce_geofence)
+                    <x-badge variant="success" style="margin-inline-start:4px">Bật GPS</x-badge>
+                  @endif
+                </div>
               @endif
             </td>
             <td data-label="Quản lý &amp; Liên hệ">
@@ -170,6 +200,16 @@
                       </select>
                     </div>
                     <div class="field" style="grid-column:1 / -1"><label>Địa chỉ</label><input name="address" value="{{ $b->address }}"></div>
+                    <div class="field"><label>Vĩ độ (Lat)</label><input id="br-lat-{{ $b->id }}" type="number" step="0.000001" min="-90" max="90" name="latitude" value="{{ $b->latitude }}"></div>
+                    <div class="field"><label>Kinh độ (Lng)</label><input id="br-lng-{{ $b->id }}" type="number" step="0.000001" min="-180" max="180" name="longitude" value="{{ $b->longitude }}"></div>
+                    <div class="field"><label>Bán kính (m)</label><input type="number" min="10" max="10000" name="allowed_radius_meters" value="{{ $b->allowed_radius_meters ?? 150 }}"></div>
+                    <div class="field" style="display:flex;flex-direction:column;justify-content:flex-end;gap:6px">
+                      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:0.84rem">
+                        <input type="checkbox" name="enforce_geofence" value="1" @checked($b->enforce_geofence)>
+                        <span>Chặn chấm ngoài bán kính GPS</span>
+                      </label>
+                      <button type="button" class="btn-outline btn-sm" onclick="tadFillGps('br-lat-{{ $b->id }}','br-lng-{{ $b->id }}',this)" style="width:max-content">📍 Lấy tọa độ hiện tại</button>
+                    </div>
                   </div>
                   <div style="margin-top:0.75rem"><button type="submit" class="btn-sm">Lưu thay đổi</button></div>
                 </form>
@@ -187,4 +227,27 @@
     <div class="pagination-wrap">{{ $branches->links() }}</div>
   @endif
 </section>
+
+<script>
+function tadFillGps(latId, lngId, btn) {
+  if (!navigator.geolocation) { alert('Trình duyệt không hỗ trợ lấy vị trí GPS.'); return; }
+  var oldText = btn.textContent;
+  btn.textContent = 'Đang lấy tọa độ...';
+  btn.disabled = true;
+  navigator.geolocation.getCurrentPosition(
+    function (pos) {
+      document.getElementById(latId).value = pos.coords.latitude.toFixed(6);
+      document.getElementById(lngId).value = pos.coords.longitude.toFixed(6);
+      btn.textContent = '✓ Đã điền tọa độ (±' + Math.round(pos.coords.accuracy) + 'm)';
+      btn.disabled = false;
+    },
+    function () {
+      alert('Không thể lấy tọa độ GPS. Hãy cấp quyền vị trí cho trình duyệt hoặc nhập tay từ Google Maps.');
+      btn.textContent = oldText;
+      btn.disabled = false;
+    },
+    { enableHighAccuracy: true, timeout: 10000 }
+  );
+}
+</script>
 @endsection

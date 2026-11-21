@@ -25,4 +25,9 @@ enum DeviceTokenStore {
         ]) { _, replacement in replacement }
         SecItemAdd(attrs as CFDictionary, nil)
     }
+    static func clear() {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                   kSecAttrService as String: service, kSecAttrAccount as String: account]
+        SecItemDelete(query as CFDictionary)
+    }
 }

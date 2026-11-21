@@ -73,10 +73,9 @@
       <thead>
         <tr>
           <th>Nhân viên</th>
-          <th>Thời gian quét</th>
-          <th>Thiết bị</th>
-          <th>Loại lượt</th>
-          <th>Độ khớp</th>
+          <th>Ngày &amp; giờ chấm công</th>
+          <th>Tọa độ GPS &amp; Thiết bị</th>
+          <th>Khoảng cách tới trụ sở</th>
           <th>Trạng thái</th>
           <th>Minh chứng</th>
           <th>Xét duyệt</th>
@@ -88,6 +87,7 @@
             [$stText, $stVariant] = $stateLabels[$ev->review_state] ?? [$ev->review_state, 'neutral'];
             $ini = mb_strtoupper(mb_substr(trim($ev->employee->full_name), 0, 2));
             $pct = max(0, min(100, (int) round(((float) $ev->match_score) * 100)));
+            $evBranch = $ev->branch ?? $ev->employee?->branch;
           @endphp
           <tr>
             <td data-label="Nhân viên">
@@ -95,21 +95,36 @@
                 <span class="person-avatar">{{ $ini }}</span>
                 <div>
                   <strong>{{ $ev->employee->full_name }}</strong>
-                  <div class="muted small">{{ $ev->employee->code }}</div>
+                  <div class="muted small">Mã NV: {{ $ev->employee->code }}</div>
                 </div>
               </div>
             </td>
-            <td data-label="Thời gian">
-              <div class="num">{{ $ev->captured_at->timezone($tz)->format('d/m/Y H:i:s') }}</div>
-              <div class="muted small">Nhận: {{ $ev->received_at->timezone($tz)->format('H:i:s') }}</div>
+            <td data-label="Ngày &amp; giờ">
+              <div class="num"><strong>{{ $ev->captured_at->timezone($tz)->format('Y-m-d H:i:s') }}</strong></div>
+              <div class="muted small">{{ $dirLabels[$ev->direction] ?? $ev->direction }} · Khớp {{ number_format((float)$ev->match_score, 3) }}</div>
             </td>
-            <td data-label="Thiết bị">{{ $ev->device->name }}</td>
-            <td data-label="Loại lượt"><x-badge variant="info">{{ $dirLabels[$ev->direction] ?? $ev->direction }}</x-badge></td>
-            <td data-label="Độ khớp">
-              <div class="score-pill">
-                <span class="score-bar" aria-hidden="true"><span style="width:{{ $pct }}%"></span></span>
-                <span>{{ number_format((float)$ev->match_score, 3) }}</span>
-              </div>
+            <td data-label="Tọa độ GPS &amp; Thiết bị">
+              @if($ev->latitude !== null && $ev->longitude !== null)
+                <div class="num">
+                  <a href="https://maps.google.com/?q={{ $ev->latitude }},{{ $ev->longitude }}" target="_blank" rel="noopener noreferrer" style="color:var(--color-primary);text-decoration:underline">
+                    {{ number_format($ev->latitude, 6, '.', '') }}, {{ number_format($ev->longitude, 6, '.', '') }}
+                  </a>
+                  @if($ev->gps_accuracy_meters !== null)
+                    <span class="muted small">(±{{ round($ev->gps_accuracy_meters) }} m)</span>
+                  @endif
+                </div>
+              @else
+                <span class="muted small">Không có tọa độ GPS</span>
+              @endif
+              <div class="muted small">{{ $ev->device->name }}</div>
+            </td>
+            <td data-label="Khoảng cách tới trụ sở">
+              @if($ev->distance_meters !== null)
+                <div class="num"><strong>{{ number_format($ev->distance_meters, 1, ',', '.') }} m</strong></div>
+                <div class="muted small">Theo trụ sở {{ $evBranch?->code ?? '—' }}@if($evBranch?->allowed_radius_meters) (≤ {{ $evBranch->allowed_radius_meters }} m)@endif</div>
+              @else
+                <span class="muted small">{{ $evBranch ? ('Trụ sở ' . $evBranch->code) : '—' }}</span>
+              @endif
             </td>
             <td data-label="Trạng thái">
               <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">

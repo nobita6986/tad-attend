@@ -96,7 +96,7 @@ class ReportController extends Controller
         $this->applyAttendanceBranchScope($eventsQuery, $scope['effectiveBranchIds']);
         $events = $eventsQuery->orderBy('captured_at')->get();
 
-        $headers = ['Mã sự kiện', 'Chi nhánh', 'Mã NV', 'Họ tên', 'Ngày', 'Giờ', 'Loại lượt', 'Thiết bị', 'Trạng thái', 'Điểm khớp', 'Ngoại tuyến', 'Ảnh minh chứng'];
+        $headers = ['Mã sự kiện', 'Chi nhánh', 'Mã NV', 'Họ tên', 'Ngày', 'Giờ', 'Loại lượt', 'Thiết bị', 'Tọa độ GPS', 'Sai số GPS (m)', 'Cách trụ sở (m)', 'Trạng thái', 'Điểm khớp', 'Ngoại tuyến', 'Ảnh minh chứng'];
         $dirLabels = ['both' => 'Chấm công', 'in' => 'Vào', 'out' => 'Ra'];
         $records = $events->map(fn ($e) => [
             $e->event_uuid,
@@ -107,6 +107,9 @@ class ReportController extends Controller
             $e->captured_at->setTimezone($tz)->format('H:i:s'),
             $dirLabels[$e->direction] ?? $e->direction,
             $e->device->name,
+            ($e->latitude !== null && $e->longitude !== null) ? number_format($e->latitude, 6, '.', '') . ', ' . number_format($e->longitude, 6, '.', '') : '—',
+            $e->gps_accuracy_meters !== null ? round($e->gps_accuracy_meters, 1) : '—',
+            $e->distance_meters !== null ? round($e->distance_meters, 1) : '—',
             $e->review_state,
             $e->match_score,
             $e->is_offline ? 'Có' : 'Không',
