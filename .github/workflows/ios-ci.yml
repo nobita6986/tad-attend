@@ -37,6 +37,8 @@ env:
   PROJECT: FaceAttendance.xcodeproj
   SCHEME: FaceAttendance
   APP_NAME: FaceAttendance
+  SFACE_URL: https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+  SFACE_SHA256: 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
 
 jobs:
   # Mode 1: build unsigned .ipa (luôn chạy) -> cài bằng Sideloadly / AltStore (tự ký bằng Apple ID).
@@ -76,6 +78,32 @@ jobs:
           echo "marketing_version=$MARKETING_VER" >> "$GITHUB_OUTPUT"
           echo "build_number=$BUILD_NUM" >> "$GITHUB_OUTPUT"
           echo "Version: $RAW_TAG (marketing $MARKETING_VER, build $BUILD_NUM)"
+
+      - name: Cache OpenCV Zoo SFace ONNX model
+        uses: actions/cache@v4
+        with:
+          path: ios/FaceAttendance/Resources/face_recognition_sface_2021dec.onnx
+          key: sface-onnx-${{ env.SFACE_SHA256 }}
+
+      - name: Download & verify OpenCV Zoo SFace ONNX model (100% compatible with Android)
+        run: |
+          MODEL="ios/FaceAttendance/Resources/face_recognition_sface_2021dec.onnx"
+          mkdir -p "$(dirname "$MODEL")"
+          if [ -f "$MODEL" ] && [ "$(shasum -a 256 "$MODEL" | awk '{print $1}')" = "$SFACE_SHA256" ]; then
+            echo "SFace ONNX model cache hit & verified."
+          else
+            echo "Downloading SFace ONNX model..."
+            curl -fL --retry 3 "$SFACE_URL" -o "${MODEL}.tmp"
+            ACTUAL="$(shasum -a 256 "${MODEL}.tmp" | awk '{print $1}')"
+            if [ "$ACTUAL" != "$SFACE_SHA256" ]; then
+              rm -f "${MODEL}.tmp"
+              echo "::error::SFace SHA-256 mismatch! expected=$SFACE_SHA256 actual=$ACTUAL"
+              exit 1
+            fi
+            mv "${MODEL}.tmp" "$MODEL"
+            echo "SFace ONNX model downloaded & verified."
+          fi
+          ls -lh "$MODEL"
 
       - name: Install XcodeGen & generate Xcode project
         working-directory: ios
