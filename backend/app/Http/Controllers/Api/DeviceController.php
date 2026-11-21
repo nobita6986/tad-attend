@@ -27,14 +27,32 @@ class DeviceController extends Controller
             'hardware_id' => ['required', 'string', 'min:8', 'max:80'],
             'name' => ['nullable', 'string', 'max:120'],
             'device_model' => ['nullable', 'string', 'max:120'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'gps_accuracy_meters' => ['nullable', 'numeric', 'min:0', 'max:50000'],
         ]);
         $hwId = strtoupper(trim($data['hardware_id']));
         $requestedName = isset($data['name']) ? trim((string) $data['name']) : '';
         $deviceModel = isset($data['device_model']) && trim((string) $data['device_model']) !== ''
             ? trim((string) $data['device_model'])
             : null;
+        $regLat = isset($data['latitude']) && $data['latitude'] !== '' ? (float) $data['latitude'] : null;
+        $regLng = isset($data['longitude']) && $data['longitude'] !== '' ? (float) $data['longitude'] : null;
+        $regAcc = isset($data['gps_accuracy_meters']) && $data['gps_accuracy_meters'] !== '' ? round((float) $data['gps_accuracy_meters'], 2) : null;
 
-        $outcome = DB::transaction(function () use ($hwId, $requestedName, $deviceModel) {
+        $nearestBranch = null;
+        $nearestDistance = null;
+        if ($regLat !== null && $regLng !== null) {
+            foreach (\App\Models\Branch::where('active', true)->whereNotNull('latitude')->whereNotNull('longitude')->get() as $br) {
+                $d = \App\Models\Branch::haversineMeters($regLat, $regLng, (float) $br->latitude, (float) $br->longitude);
+                if ($nearestDistance === null || $d < $nearestDistance) {
+                    $nearestDistance = $d;
+                    $nearestBranch = $br;
+                }
+            }
+        }
+
+        $outcome = DB::transaction(function () use ($hwId, $requestedName, $deviceModel, $regLat, $regLng, $regAcc, $nearestBranch, $nearestDistance) {
             $device = Device::where('hardware_id', $hwId)->lockForUpdate()->first();
 
             if ($device) {
@@ -92,6 +110,11 @@ class DeviceController extends Controller
                 if ($deviceModel !== null) {
                     $updates['device_model'] = $deviceModel;
                 }
+                if ($regLat !== null && $regLng !== null) {
+                    $updates['registered_latitude'] = $regLat;
+                    $updates['registered_longitude'] = $regLng;
+                    $updates['registered_gps_accuracy_meters'] = $regAcc;
+                }
                 $device->update($updates);
 
                 AuditLog::create([
@@ -125,6 +148,9 @@ class DeviceController extends Controller
                 'name' => $fallbackName,
                 'hardware_id' => $hwId,
                 'device_model' => $deviceModel,
+                'registered_latitude' => $regLat,
+                'registered_longitude' => $regLng,
+                'registered_gps_accuracy_meters' => $regAcc,
                 'direction' => 'both',
                 'token_hash' => hash('sha256', bin2hex(random_bytes(32))),
                 'active' => false,
@@ -140,6 +166,10 @@ class DeviceController extends Controller
                     'name' => $device->name,
                     'hardware_id' => $hwId,
                     'device_model' => $deviceModel,
+                    'registered_latitude' => $regLat,
+                    'registered_longitude' => $regLng,
+                    'nearest_branch' => $nearestBranch?->code,
+                    'nearest_distance_meters' => $nearestDistance,
                 ],
             ]);
 
@@ -150,7 +180,9 @@ class DeviceController extends Controller
                     'device_id' => $device->id,
                     'name' => $device->name,
                     'hardware_id' => $device->hardware_id,
-                    'message' => 'Đã gửi yêu cầu đăng ký. Vui lòng mở trang Quản trị → Thiết bị và bấm Đồng ý.',
+                    'nearest_branch' => $nearestBranch ? ['code' => $nearestBranch->code, 'name' => $nearestBranch->name] : null,
+                    'nearest_distance_meters' => $nearestDistance,
+                    'message' => 'Đã gửi yêu cầu đăng ký kèm tọa độ GPS. Vui lòng mở trang Quản trị → Thiết bị và bấm Đồng ý.',
                 ],
             ];
         });

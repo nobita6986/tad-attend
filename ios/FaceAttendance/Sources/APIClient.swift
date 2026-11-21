@@ -53,7 +53,8 @@ final class APIClient {
 
     // MARK: - Self-service device registration & activation
 
-    func registerDevice(hardwareID: String, name: String?, deviceModel: String) async throws -> DeviceRegistrationResponse {
+    func registerDevice(hardwareID: String, name: String?, deviceModel: String,
+                        location: LocationSnapshot?) async throws -> DeviceRegistrationResponse {
         var req = try unauthenticatedRequest("devices/register", method: "POST")
         var payload: [String: Any] = [
             "hardware_id": hardwareID,
@@ -61,6 +62,11 @@ final class APIClient {
         ]
         if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             payload["name"] = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let location {
+            payload["latitude"] = location.latitude
+            payload["longitude"] = location.longitude
+            payload["gps_accuracy_meters"] = location.accuracyMeters
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
         let (data, response) = try await URLSession.shared.data(for: req)

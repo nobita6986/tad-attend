@@ -1,7 +1,17 @@
 import ARKit
+import Combine
 import Foundation
 import SwiftUI
 import UIKit
+
+enum KioskVisualState: Equatable {
+    case idle
+    case liveness
+    case processing
+    case success
+    case warning
+    case error
+}
 
 struct DirectEnrollmentRequest {
     let mode: String // "existing" | "create"
@@ -18,6 +28,7 @@ final class RecognitionCoordinator: ObservableObject {
 
     @Published var message = "Đang kết nối máy chủ chấm công..."
     @Published var headline = "Sẵn sàng"
+    @Published var visualState: KioskVisualState = .idle
     @Published var deviceInfo: DeviceInfo?
     @Published var enrollmentOptions: EnrollmentOptionsResponse?
     @Published var enrollmentCount = 0
@@ -33,6 +44,9 @@ final class RecognitionCoordinator: ObservableObject {
 
     private let api = APIClient()
     private let offlineStore = OfflineQueueStore()
+    private let notificationHaptic = UINotificationFeedbackGenerator()
+    private let impactHaptic = UIImpactFeedbackGenerator(style: .light)
+    private var cancellables = Set<AnyCancellable>()
     private var engine: FaceEmbeddingEngine?
     private var roster: [EnrolledPerson] = []
     private var mode: Mode = .kiosk
@@ -48,9 +62,19 @@ final class RecognitionCoordinator: ObservableObject {
 
     init() {
         pendingOfflineCount = offlineStore.all().count
+        locationService.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
         tracker.onFrame = { [weak self] buffer, yaw, hasFace in
             Task { @MainActor in self?.onFrame(buffer: buffer, yaw: yaw, hasFace: hasFace) }
         }
+    }
+
+    func refreshLocation() {
+        locationService.start()
     }
 
     var deviceModelName: String {
@@ -122,16 +146,37 @@ final class RecognitionCoordinator: ObservableObject {
 
     func requestDeviceRegistration(deviceName: String?) async {
         stopPolling()
+        locationService.start()
+        guard let location = locationService.currentLocation else {
+            notificationHaptic.notificationOccurred(.warning)
+            registrationStatus = "Chưa lấy được tọa độ GPS. Hãy đứng tại trụ sở chi nhánh, bật Dịch vụ định vị rồi thử lại."
+            return
+        }
         do {
-            let res = try await api.registerDevice(hardwareID: hardwareID, name: deviceName, deviceModel: deviceModelName)
-            registrationStatus = res.message ?? res.status
+            let res = try await api.registerDevice(
+                hardwareID: hardwareID,
+                name: deviceName,
+                deviceModel: deviceModelName,
+                location: location
+            )
             if res.status == "approved", let tok = res.token, !tok.isEmpty {
                 DeviceTokenStore.save(tok)
+                notificationHaptic.notificationOccurred(.success)
+                registrationStatus = res.message ?? "Thiết bị đã được duyệt!"
                 await connect()
             } else if res.status == "pending" {
+                notificationHaptic.notificationOccurred(.success)
+                if let branch = res.nearest_branch, let dist = res.nearest_distance_meters {
+                    registrationStatus = "Đã gửi yêu cầu kèm GPS (gần \(branch.name), cách \(Int(dist.rounded())) m). Chờ Quản trị viên duyệt..."
+                } else {
+                    registrationStatus = res.message ?? "Đã gửi yêu cầu đăng ký kèm tọa độ GPS. Chờ Quản trị viên duyệt..."
+                }
                 startApprovalPolling()
+            } else {
+                registrationStatus = res.message ?? res.status
             }
         } catch {
+            notificationHaptic.notificationOccurred(.error)
             registrationStatus = error.localizedDescription
         }
     }
@@ -238,6 +283,7 @@ final class RecognitionCoordinator: ObservableObject {
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             if Task.isCancelled || self.mode != .kiosk { return }
             self.lastReceipt = nil
+            self.visualState = .idle
             self.resetChallenge()
             if let info = self.deviceInfo {
                 let branchLabel = info.branch.map { " · \($0.name)" } ?? ""
@@ -255,6 +301,7 @@ final class RecognitionCoordinator: ObservableObject {
                 armed = true
                 sawTurn = false
                 if mode == .kiosk && lastReceipt == nil {
+                    visualState = .idle
                     message = "Đưa khuôn mặt vào khung, quay nhẹ đầu sang trái hoặc phải."
                 }
             }
@@ -268,20 +315,25 @@ final class RecognitionCoordinator: ObservableObject {
             guard armed else { return }
             // Fast 1-motion liveness: 1 gentle turn left OR right, then look straight
             guard let yaw else {
+                visualState = .idle
                 message = "Không đo được hướng mặt. Giữ mặt ở giữa khung hình."
                 return
             }
             if !sawTurn {
                 if abs(yaw) > 0.18 {
                     sawTurn = true
+                    visualState = .liveness
+                    impactHaptic.impactOccurred()
                     message = "Rất tốt! Nhìn thẳng vào camera để chấm công."
                 } else {
+                    visualState = .idle
                     message = "Quay nhẹ đầu sang trái hoặc phải để xác nhận."
                 }
                 return
             }
             guard abs(yaw) < 0.14 else { return }
             armed = false
+            visualState = .processing
         }
 
         lastAnalysis = Date()
@@ -307,6 +359,7 @@ final class RecognitionCoordinator: ObservableObject {
         if mode == .enrollment, let req = activeEnrollRequest {
             samples.append(result.embedding)
             enrollmentCount = samples.count
+            impactHaptic.impactOccurred()
             message = "Đã chụp \(samples.count)/5 mẫu..."
             guard samples.count >= 5 else { working = false; return }
 
@@ -331,9 +384,13 @@ final class RecognitionCoordinator: ObservableObject {
                     )
                     roster = try await api.roster(modelID: info.model_id, version: info.model_version)
                     enrollmentOptions = try? await api.enrollmentOptions()
+                    notificationHaptic.notificationOccurred(.success)
+                    visualState = .success
                     headline = "Đăng ký thành công"
                     message = "Đã lưu khuôn mặt cho \(enrolled.code) – \(enrolled.full_name)."
                 } catch {
+                    notificationHaptic.notificationOccurred(.error)
+                    visualState = .error
                     headline = "Lỗi đăng ký"
                     message = error.localizedDescription
                 }
@@ -349,6 +406,8 @@ final class RecognitionCoordinator: ObservableObject {
         let loc = locationService.currentLocation
         if let branch = info.branch, branch.hasEnforcedGeofence, let limit = branch.allowed_radius_meters {
             guard loc != nil else {
+                notificationHaptic.notificationOccurred(.warning)
+                visualState = .warning
                 headline = "Chưa có tín hiệu GPS"
                 message = AppError.locationUnavailable.localizedDescription
                 working = false
@@ -356,6 +415,8 @@ final class RecognitionCoordinator: ObservableObject {
                 return
             }
             if let dist = currentDistanceMeters, dist > Double(limit) {
+                notificationHaptic.notificationOccurred(.error)
+                visualState = .error
                 headline = "Ngoài khu vực trụ sở"
                 message = AppError.outsideGeofence(distance: dist, limit: limit, branchName: branch.name).localizedDescription
                 working = false
@@ -370,6 +431,8 @@ final class RecognitionCoordinator: ObservableObject {
 
         guard let top = matches.first, top.1 >= info.min_score,
               matches.count == 1 || top.1 - matches[1].1 >= 0.06 else {
+            notificationHaptic.notificationOccurred(.warning)
+            visualState = .warning
             headline = "Chưa nhận diện được"
             message = "Vui lòng nhìn thẳng, đủ ánh sáng và thử lại."
             working = false
@@ -392,6 +455,8 @@ final class RecognitionCoordinator: ObservableObject {
                     location: loc
                 )
                 lastReceipt = receipt
+                notificationHaptic.notificationOccurred(.success)
+                visualState = receipt.review_state == "accepted" ? .success : .warning
                 headline = "Xin chào \(receipt.employee_name)"
                 message = receipt.duplicate ? "Bạn đã chấm công trước đó." : "Chấm công thành công!"
                 await flushOfflineQueue()
@@ -409,9 +474,13 @@ final class RecognitionCoordinator: ObservableObject {
                     imageJPEG: result.evidenceJPEG
                 )
                 pendingOfflineCount = offlineStore.all().count
+                notificationHaptic.notificationOccurred(.warning)
+                visualState = .warning
                 headline = "Đã lưu tạm ngoại tuyến"
                 message = "Mất kết nối (\(urlErr.localizedDescription)). Đã lưu lượt của \(top.0.full_name) và sẽ tự gửi khi có mạng."
             } catch {
+                notificationHaptic.notificationOccurred(.error)
+                visualState = .error
                 headline = "Không thể chấm công"
                 message = error.localizedDescription
             }

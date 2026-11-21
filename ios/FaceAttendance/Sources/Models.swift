@@ -30,6 +30,12 @@ struct DeviceInfo: Decodable {
     let min_score: Double
 }
 
+struct NearestBranchSummary: Decodable, Equatable {
+    let id: Int
+    let code: String
+    let name: String
+}
+
 struct DeviceRegistrationResponse: Decodable {
     let status: String
     let message: String?
@@ -38,6 +44,8 @@ struct DeviceRegistrationResponse: Decodable {
     let name: String?
     let direction: String?
     let hardware_id: String?
+    let nearest_branch: NearestBranchSummary?
+    let nearest_distance_meters: Double?
 }
 
 struct EnrolledPerson: Decodable, Identifiable {
