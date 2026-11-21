@@ -203,18 +203,21 @@ struct ContentView: View {
         VStack(spacing: 14) {
             // Compact HIG top header
             HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(TADTheme.brand)
-                        .frame(width: 36, height: 36)
-                    Image(systemName: "faceid")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.white)
-                }
+                Image("TADLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: 30)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color(.separator).opacity(0.25), lineWidth: 0.5)
+                    )
                 VStack(alignment: .leading, spacing: 2) {
                     Text("TAD Attend")
                         .font(.headline)
-                    Text(coordinator.deviceInfo?.name ?? "Thiết bị chưa kích hoạt")
+                    Text(kioskSubtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -344,6 +347,13 @@ struct ContentView: View {
         .background(TADTheme.canvas.ignoresSafeArea())
     }
 
+    private var kioskSubtitle: String {
+        if let branch = coordinator.deviceInfo?.branch {
+            return branch.name
+        }
+        return coordinator.isRunning ? "Chấm công khuôn mặt" : "Máy chưa kích hoạt"
+    }
+
     private var connectionPill: some View {
         HStack(spacing: 5) {
             Circle()
@@ -366,12 +376,17 @@ struct ContentView: View {
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(coordinator.isOutsideGeofence ? .red : Color(red: 0.20, green: 0.84, blue: 0.48))
                 if let dist = coordinator.currentDistanceMeters {
-                    let radiusText = branch.allowed_radius_meters.map { " / \($0) m" } ?? ""
-                    Text("\(branch.name) · \(Int(dist.rounded())) m\(radiusText)")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.white)
+                    if coordinator.isOutsideGeofence {
+                        Text("Ngoài khu vực chi nhánh (\(Int(dist.rounded())) m)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                    } else {
+                        Text("\(branch.name) · Đúng vị trí")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
                 } else {
-                    Text("\(branch.name) · Đang lấy GPS...")
+                    Text("\(branch.name) · Đang định vị...")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.9))
                 }
@@ -653,13 +668,13 @@ struct ContentView: View {
     private var settingsView: some View {
         NavigationStack {
             Form {
-                // Section 1: Mandatory Branch HQ GPS Verification
+                // Section 1: Mandatory Branch HQ Location Verification
                 Section {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label("Yêu cầu đứng tại trụ sở chi nhánh", systemImage: "building.2.crop.circle.fill")
+                        Label("Đứng tại trụ sở chi nhánh khi đăng ký", systemImage: "building.2.crop.circle.fill")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(TADTheme.brand)
-                        Text("Khi đăng ký thiết bị lần đầu, ứng dụng sẽ gửi kèm tọa độ GPS hiện tại về máy chủ để Quản trị viên xác minh máy đặt đúng chi nhánh.")
+                        Text("Khi kích hoạt máy lần đầu, ứng dụng sẽ tự gửi vị trí hiện tại để Quản lý xác nhận máy đặt đúng chi nhánh.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -671,10 +686,10 @@ struct ContentView: View {
                                 .foregroundStyle(.green)
                                 .font(.title3)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Đã sẵn sàng tọa độ GPS")
+                                Text("Đã xác định vị trí")
                                     .font(.subheadline.weight(.semibold))
-                                Text(String(format: "%.6f, %.6f (sai số ±%.0f m)", loc.latitude, loc.longitude, loc.accuracyMeters))
-                                    .font(.system(.caption, design: .monospaced))
+                                Text(loc.accuracyMeters <= 50 ? "Tín hiệu định vị tốt" : "Đang định vị chính xác hơn...")
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
@@ -687,10 +702,10 @@ struct ContentView: View {
                         }
                     } else if isLocationDenied {
                         VStack(alignment: .leading, spacing: 8) {
-                            Label("Quyền định vị GPS đang bị tắt", systemImage: "location.slash.fill")
+                            Label("Định vị (GPS) đang bị tắt", systemImage: "location.slash.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.red)
-                            Button("Mở Cài đặt GPS cho TAD Attend") {
+                            Button("Mở Cài đặt bật Định vị") {
                                 if let url = URL(string: UIApplication.openSettingsURLString) {
                                     UIApplication.shared.open(url)
                                 }
@@ -701,11 +716,11 @@ struct ContentView: View {
                     } else {
                         HStack(spacing: 10) {
                             ProgressView()
-                            Text("Đang xác định tọa độ GPS trụ sở...")
+                            Text("Đang tìm vị trí chi nhánh...")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            Button("Lấy lại") {
+                            Button("Thử lại") {
                                 coordinator.refreshLocation()
                             }
                             .font(.footnote.weight(.semibold))
@@ -714,49 +729,18 @@ struct ContentView: View {
                         }
                     }
                 } header: {
-                    Text("Vị trí trụ sở (Bắt buộc)")
+                    Text("Vị trí chi nhánh (Bắt buộc)")
                 }
 
                 // Section 2: Self-Service Device Registration
                 Section {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Mã máy cố định")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(coordinator.hardwareID)
-                                .font(.system(.footnote, design: .monospaced))
-                                .foregroundStyle(.primary)
-                        }
-                        Spacer()
-                        Button {
-                            UIPasteboard.general.string = coordinator.hardwareID
-                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                            copiedHardwareID = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                                copiedHardwareID = false
-                            }
-                        } label: {
-                            Label(copiedHardwareID ? "Đã chép" : "Sao chép",
-                                  systemImage: copiedHardwareID ? "checkmark" : "doc.on.doc")
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-
-                    TextField("Địa chỉ máy chủ HTTPS", text: $serverURL)
-                        .keyboardType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-
-                    TextField("Tên thiết bị (VD: iPhone Cổng Hà Nội)", text: $deviceNameInput)
+                    TextField("Tên máy chấm công (VD: Máy cổng chính)", text: $deviceNameInput)
 
                     Button {
                         UserDefaults.standard.set(serverURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "baseURL")
                         Task { await coordinator.requestDeviceRegistration(deviceName: deviceNameInput) }
                     } label: {
-                        Label("Gửi yêu cầu đăng ký & Chờ duyệt", systemImage: "paperplane.fill")
+                        Label("Gửi yêu cầu kích hoạt máy", systemImage: "paperplane.fill")
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                     }
@@ -765,7 +749,7 @@ struct ContentView: View {
                     .disabled(!hasValidRegistrationGPS)
 
                     if !hasValidRegistrationGPS {
-                        Text("Nút đăng ký sẽ tự mở khóa ngay khi thiết bị lấy được tọa độ GPS tại trụ sở chi nhánh.")
+                        Text("Nút đăng ký sẽ mở ngay khi điện thoại xác định được vị trí tại chi nhánh.")
                             .font(.caption)
                             .foregroundStyle(.orange)
                     }
@@ -773,7 +757,7 @@ struct ContentView: View {
                     if coordinator.isPollingApproval {
                         HStack(spacing: 10) {
                             ProgressView()
-                            Text("Đang chờ Quản trị viên bấm Đồng ý trên web...")
+                            Text("Đang chờ Quản lý bấm Đồng ý...")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -785,32 +769,55 @@ struct ContentView: View {
                             .foregroundStyle(TADTheme.brand)
                     }
                 } header: {
-                    Text("Đăng ký thiết bị tự động")
+                    Text("Đăng ký máy chấm công")
                 }
 
-                // Section 3: Branch & Geofence Status
-                Section("Chi nhánh & Phạm vi GPS") {
+                // Section 3: Branch & Location Info
+                Section("Thông tin chi nhánh") {
                     if let branch = coordinator.deviceInfo?.branch {
-                        LabeledContent("Chi nhánh", value: "\(branch.code) – \(branch.name)")
+                        LabeledContent("Chi nhánh", value: branch.name)
                         if let limit = branch.allowed_radius_meters {
-                            LabeledContent(
-                                "Bán kính cho phép",
-                                value: "\(limit) m (\((branch.enforce_geofence ?? false) ? "Bắt buộc" : "Ghi nhận"))"
-                            )
-                        }
-                        if let dist = coordinator.currentDistanceMeters {
-                            LabeledContent("Khoảng cách tới trụ sở", value: "\(Int(dist.rounded())) m")
+                            LabeledContent("Phạm vi chấm công", value: "\(limit) m quanh chi nhánh")
                         }
                     } else {
-                        Text("Thiết bị chưa được gán chi nhánh.")
+                        Text("Máy chưa được gắn vào chi nhánh nào.")
                             .foregroundStyle(.secondary)
                     }
                 }
 
-                // Section 4: Collapsible Advanced Token Config
+                // Section 4: Collapsible Technical Config (Hidden from normal workers)
                 Section {
-                    DisclosureGroup("Cấu hình nâng cao (Token dự phòng)", isExpanded: $showAdvancedConfig) {
-                        SecureField("Dán Bearer token thủ công", text: $newToken)
+                    DisclosureGroup("Cấu hình nâng cao (Dành cho kỹ thuật)", isExpanded: $showAdvancedConfig) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Mã máy cố định")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(coordinator.hardwareID)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .foregroundStyle(.primary)
+                            }
+                            Spacer()
+                            Button {
+                                UIPasteboard.general.string = coordinator.hardwareID
+                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                copiedHardwareID = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    copiedHardwareID = false
+                                }
+                            } label: {
+                                Label(copiedHardwareID ? "Đã chép" : "Sao chép",
+                                      systemImage: copiedHardwareID ? "checkmark" : "doc.on.doc")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        TextField("Địa chỉ máy chủ", text: $serverURL)
+                            .keyboardType(.URL)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                        SecureField("Mã kết nối dự phòng", text: $newToken)
                         Button("Lưu & Kết nối lại") {
                             UserDefaults.standard.set(serverURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "baseURL")
                             if !newToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -819,7 +826,7 @@ struct ContentView: View {
                             }
                             Task { await coordinator.connect() }
                         }
-                        Button("Xóa token thiết bị", role: .destructive) {
+                        Button("Ngắt kết nối máy này", role: .destructive) {
                             DeviceTokenStore.clear()
                             coordinator.tracker.stop()
                             coordinator.isRunning = false

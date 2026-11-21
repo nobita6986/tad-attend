@@ -130,25 +130,25 @@ enum AppError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notConfigured:
-            return "Thiết bị chưa kết nối máy chủ. Mở mục Cấu hình để đăng ký thiết bị."
+            return "Máy chưa được kích hoạt. Nhờ quản lý mở mục Cấu hình để đăng ký máy."
         case .modelMissing:
-            return "Không khởi tạo được bộ nhận diện khuôn mặt."
+            return "Không khởi động được tính năng nhận diện khuôn mặt."
         case .noSingleFace:
-            return "Vui lòng giữ đúng 1 khuôn mặt rõ ràng trong khung hình."
+            return "Vui lòng đứng 1 mình, đưa khuôn mặt rõ vào giữa khung hình."
         case .badModelIO:
-            return "Dữ liệu mô hình khuôn mặt không hợp lệ."
+            return "Chưa chụp rõ khuôn mặt. Vui lòng giữ yên và thử lại."
         case .badEmbedding:
-            return "Không tạo được đặc trưng khuôn mặt hợp lệ."
+            return "Chưa nhận diện rõ khuôn mặt. Vui lòng đứng nơi đủ sáng và thử lại."
         case .livenessNotVerified:
-            return "Vui lòng quay nhẹ đầu sang trái hoặc phải để xác nhận người thật."
+            return "Vui lòng quay nhẹ đầu sang trái hoặc phải rồi nhìn thẳng."
         case .locationUnavailable:
-            return "Chưa lấy được vị trí GPS. Vui lòng bật Dịch vụ định vị cho TAD Attend."
+            return "Chưa xác định được vị trí. Vui lòng bật Định vị (GPS) trên điện thoại."
         case .outsideGeofence(let distance, let limit, let branchName):
-            return "Bạn đang cách trụ sở \(branchName) \(Int(distance.rounded())) m, vượt giới hạn \(limit) m."
+            return "Bạn đang cách \(branchName) khoảng \(Int(distance.rounded())) m (cho phép tối đa \(limit) m)."
         case .network(let text):
             return text
         case .recognitionUncertain:
-            return "Chưa nhận diện rõ. Vui lòng nhìn thẳng vào camera và thử lại."
+            return "Chưa nhận diện được. Vui lòng nhìn thẳng, đủ sáng và thử lại."
         }
     }
 }

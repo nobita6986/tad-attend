@@ -124,7 +124,7 @@ final class RecognitionCoordinator: ObservableObject {
             guard info.model_id != "UNCONFIGURED", info.model_version != "UNCONFIGURED" else {
                 throw AppError.notConfigured
             }
-            let dims = info.embedding_dimensions ?? 192
+            let dims = info.embedding_dimensions ?? 128
             engine = FaceEmbeddingEngine(targetDimensions: dims)
             let people = try await api.roster(modelID: info.model_id, version: info.model_version)
             deviceInfo = info
@@ -133,12 +133,18 @@ final class RecognitionCoordinator: ObservableObject {
             resetChallenge()
             try tracker.start()
             isRunning = true
-            let branchLabel = info.branch.map { " · \($0.name)" } ?? ""
-            headline = "\(info.name)\(branchLabel)"
-            message = "Đưa khuôn mặt vào khung và quay nhẹ đầu. Đã đồng bộ \(people.count) nhân viên."
+            visualState = .idle
+            if people.isEmpty {
+                headline = "Chưa có khuôn mặt đăng ký"
+                message = "Chi nhánh chưa có nhân viên nào đăng ký khuôn mặt. Vui lòng mở mục Đăng ký."
+            } else {
+                headline = "Sẵn sàng chấm công"
+                message = "Đưa khuôn mặt vào khung hình và quay nhẹ đầu."
+            }
             await flushOfflineQueue()
         } catch {
             engine = nil
+            visualState = .warning
             headline = "Chưa thể chấm công"
             message = error.localizedDescription
         }
@@ -285,11 +291,10 @@ final class RecognitionCoordinator: ObservableObject {
             self.lastReceipt = nil
             self.visualState = .idle
             self.resetChallenge()
-            if let info = self.deviceInfo {
-                let branchLabel = info.branch.map { " · \($0.name)" } ?? ""
-                self.headline = "\(info.name)\(branchLabel)"
-            }
-            self.message = "Mời người tiếp theo đưa mặt vào khung hình."
+            self.headline = self.roster.isEmpty ? "Chưa có khuôn mặt đăng ký" : "Sẵn sàng chấm công"
+            self.message = self.roster.isEmpty
+                ? "Chi nhánh chưa có nhân viên nào đăng ký khuôn mặt. Vui lòng mở mục Đăng ký."
+                : "Mời người tiếp theo đưa khuôn mặt vào khung hình."
         }
     }
 
@@ -302,7 +307,10 @@ final class RecognitionCoordinator: ObservableObject {
                 sawTurn = false
                 if mode == .kiosk && lastReceipt == nil {
                     visualState = .idle
-                    message = "Đưa khuôn mặt vào khung, quay nhẹ đầu sang trái hoặc phải."
+                    headline = roster.isEmpty ? "Chưa có khuôn mặt đăng ký" : "Sẵn sàng chấm công"
+                    message = roster.isEmpty
+                        ? "Chi nhánh chưa có nhân viên nào đăng ký khuôn mặt."
+                        : "Đưa khuôn mặt vào khung hình và quay nhẹ đầu."
                 }
             }
             return
@@ -316,7 +324,8 @@ final class RecognitionCoordinator: ObservableObject {
             // Fast 1-motion liveness: 1 gentle turn left OR right, then look straight
             guard let yaw else {
                 visualState = .idle
-                message = "Không đo được hướng mặt. Giữ mặt ở giữa khung hình."
+                headline = "Sẵn sàng chấm công"
+                message = "Giữ khuôn mặt ở giữa khung hình."
                 return
             }
             if !sawTurn {
@@ -324,16 +333,20 @@ final class RecognitionCoordinator: ObservableObject {
                     sawTurn = true
                     visualState = .liveness
                     impactHaptic.impactOccurred()
-                    message = "Rất tốt! Nhìn thẳng vào camera để chấm công."
+                    headline = "Giữ nguyên mặt"
+                    message = "Nhìn thẳng vào camera để chấm công."
                 } else {
                     visualState = .idle
-                    message = "Quay nhẹ đầu sang trái hoặc phải để xác nhận."
+                    headline = "Sẵn sàng chấm công"
+                    message = "Quay nhẹ đầu sang trái hoặc phải."
                 }
                 return
             }
             guard abs(yaw) < 0.14 else { return }
             armed = false
             visualState = .processing
+            headline = "Đang xác nhận..."
+            message = "Vui lòng giữ yên trong giây lát."
         }
 
         lastAnalysis = Date()
@@ -425,6 +438,16 @@ final class RecognitionCoordinator: ObservableObject {
             }
         }
 
+        if roster.isEmpty {
+            notificationHaptic.notificationOccurred(.warning)
+            visualState = .warning
+            headline = "Chưa có khuôn mặt đăng ký"
+            message = "Vui lòng nhờ quản lý đăng ký khuôn mặt của bạn trước khi chấm công."
+            working = false
+            scheduleAutoReset()
+            return
+        }
+
         let matches = roster
             .map { person in (person, FaceEmbeddingEngine.similarity(result.embedding, person.template)) }
             .sorted { $0.1 > $1.1 }
@@ -434,7 +457,7 @@ final class RecognitionCoordinator: ObservableObject {
             notificationHaptic.notificationOccurred(.warning)
             visualState = .warning
             headline = "Chưa nhận diện được"
-            message = "Vui lòng nhìn thẳng, đủ ánh sáng và thử lại."
+            message = "Vui lòng nhìn thẳng, đủ sáng và thử lại."
             working = false
             scheduleAutoReset()
             return
