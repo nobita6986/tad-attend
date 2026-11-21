@@ -86,6 +86,12 @@ jobs:
           path: ios/FaceAttendance/Resources/FaceEmbedding.mlpackage
           key: sface-coreml-v1-${{ env.SFACE_SHA256 }}
 
+      - name: Setup Python 3.11 (prebuilt macOS ARM64 wheels for Core ML & PyTorch)
+        if: steps.cache_coreml.outputs.cache-hit != 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Convert OpenCV Zoo SFace ONNX -> Core ML (100% compatible with Android)
         if: steps.cache_coreml.outputs.cache-hit != 'true'
         run: |
@@ -97,11 +103,11 @@ jobs:
             echo "::error::SFace SHA-256 mismatch! expected=$SFACE_SHA256 actual=$ACTUAL"
             exit 1
           fi
-          python3 -m venv "$RUNNER_TEMP/coreml-venv"
+          python -m venv "$RUNNER_TEMP/coreml-venv"
           source "$RUNNER_TEMP/coreml-venv/bin/activate"
           pip install --quiet --upgrade pip
-          pip install --quiet "numpy<2" onnx onnx2torch torch coremltools
-          python3 - "$ONNX" "ios/FaceAttendance/Resources/FaceEmbedding.mlpackage" <<'PY'
+          pip install --quiet "numpy<2" "ml_dtypes>=0.5" "onnx>=1.16,<1.18" onnx2torch "torch>=2.2,<2.6" "coremltools>=8.0"
+          python - "$ONNX" "ios/FaceAttendance/Resources/FaceEmbedding.mlpackage" <<'PY'
           import sys, numpy as np, torch, coremltools as ct
           from onnx2torch import convert
 
