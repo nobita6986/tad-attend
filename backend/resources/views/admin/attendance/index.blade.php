@@ -20,6 +20,17 @@
       <label for="filter-date">Ngày</label>
       <input id="filter-date" type="date" name="date" value="{{ $date }}">
     </div>
+    @if($branches->count() > 1)
+      <div class="field">
+        <label for="filter-branch">Chi nhánh</label>
+        <select id="filter-branch" name="branch_id">
+          <option value="">Tất cả chi nhánh</option>
+          @foreach($branches as $b)
+            <option value="{{ $b->id }}" @selected($selectedBranchId == $b->id)>{{ $b->code }} – {{ $b->name }}</option>
+          @endforeach
+        </select>
+      </div>
+    @endif
     <div class="field">
       <label for="filter-emp">Nhân viên</label>
       <select id="filter-emp" name="employee_id">

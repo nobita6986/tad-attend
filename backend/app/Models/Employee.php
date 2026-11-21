@@ -7,10 +7,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Employee extends Model
 {
-    protected $fillable = ['code', 'full_name', 'gender', 'date_of_birth', 'employed_from', 'employed_until', 'address', 'department', 'shift_id', 'active', 'consent_at', 'consent_method'];
+    protected $fillable = ['branch_id', 'code', 'full_name', 'gender', 'date_of_birth', 'employed_from', 'employed_until', 'address', 'department', 'shift_id', 'active', 'consent_at', 'consent_method'];
     protected $casts = ['active' => 'boolean', 'date_of_birth' => 'date', 'employed_from' => 'date', 'employed_until' => 'date', 'consent_at' => 'datetime'];
+    public function branch(): BelongsTo { return $this->belongsTo(Branch::class); }
     public function shift(): BelongsTo { return $this->belongsTo(Shift::class); }
     public function shiftAssignments(): HasMany { return $this->hasMany(ShiftAssignment::class); }
+    public function transfers(): HasMany { return $this->hasMany(EmployeeTransfer::class)->orderByDesc('effective_date')->orderByDesc('id'); }
     public function templates(): HasMany { return $this->hasMany(FaceTemplate::class); }
     public function events(): HasMany { return $this->hasMany(AttendanceEvent::class); }
 

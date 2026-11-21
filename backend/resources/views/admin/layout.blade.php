@@ -15,7 +15,8 @@
     $user = auth()->user();
     $isSystemAdmin = $user->isSystemAdmin();
     $initials = mb_strtoupper(mb_substr(trim($user->name ?: $user->email), 0, 2));
-    $roleTag = $user->effectiveRole() === 'admin' ? 'Admin' : 'HR';
+    $roleTag = $user->roleLabel();
+    $scopeTag = $user->scopeLabel();
 
     $navGroups = [
       [
@@ -45,8 +46,9 @@
       $navGroups[] = [
         'label' => 'Hệ thống',
         'items' => [
-          ['route' => 'admin.devices.index', 'match' => 'admin.devices.*', 'label' => 'Thiết bị',  'icon' => 'device', 'badge' => $pendingDevicesCount],
-          ['route' => 'admin.users.index',   'match' => 'admin.users.*',   'label' => 'Tài khoản', 'icon' => 'shield'],
+          ['route' => 'admin.branches.index', 'match' => 'admin.branches.*', 'label' => 'Chi nhánh', 'icon' => 'building'],
+          ['route' => 'admin.devices.index',  'match' => 'admin.devices.*',  'label' => 'Thiết bị',  'icon' => 'device', 'badge' => $pendingDevicesCount],
+          ['route' => 'admin.users.index',    'match' => 'admin.users.*',    'label' => 'Tài khoản', 'icon' => 'shield'],
         ],
       ];
     }
@@ -111,7 +113,7 @@
           <span class="avatar-dot">{{ $initials }}</span>
           <div class="sidebar-user-meta">
             <strong class="sidebar-user-name">{{ $user->name ?: $roleTag }}</strong>
-            <span class="sidebar-user-role">{{ $roleTag }} · {{ $user->email }}</span>
+            <span class="sidebar-user-role">{{ $roleTag }} · {{ $scopeTag }}</span>
           </div>
         </div>
         <form method="post" action="{{ route('admin.logout') }}" style="margin:0">

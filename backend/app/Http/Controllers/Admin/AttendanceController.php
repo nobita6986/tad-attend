@@ -1,21 +1,34 @@
 <?php
 namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Admin\Concerns\ResolvesBranchScope;
 use App\Http\Controllers\Controller;
 use App\Models\AttendanceEvent;
 use App\Models\AuditLog;
+use App\Models\Branch;
 use App\Models\Employee;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
+
 class AttendanceController extends Controller
 {
+    use ResolvesBranchScope;
+
     public function index(Request $request)
     {
+        $scope = $this->resolveBranchFilter($request);
         $data = $request->validate([
             'date' => ['nullable', 'date_format:Y-m-d'],
-            'employee_id' => ['nullable','integer','exists:employees,id'],
-            'state' => ['nullable','in:accepted,pending_review,rejected'],
+            'employee_id' => ['nullable', 'integer', 'exists:employees,id'],
+            'state' => ['nullable', 'in:accepted,pending_review,rejected'],
         ]);
+
+        if (!empty($data['employee_id'])) {
+            $emp = Employee::findOrFail((int) $data['employee_id']);
+            abort_unless($request->user()->canAccessBranch($emp->branch_id), 403, 'Bạn không có quyền xem chấm công nhân viên chi nhánh khác.');
+        }
+
         $date = $data['date'] ?? CarbonImmutable::now(config('attendance.timezone'))->format('Y-m-d');
         $start = CarbonImmutable::parse($date, config('attendance.timezone'))->startOfDay()->utc();
         $end = CarbonImmutable::parse($date, config('attendance.timezone'))->addDay()->startOfDay()->utc();
@@ -23,34 +36,64 @@ class AttendanceController extends Controller
         if (!in_array($perPage, [20, 30, 50, 100], true)) {
             $perPage = 30;
         }
-        $events = AttendanceEvent::with(['employee','device'])
-            ->where('captured_at', '>=', $start)->where('captured_at', '<', $end)
+
+        $eventsQuery = AttendanceEvent::with(['employee.branch', 'device', 'branch'])
+            ->where('captured_at', '>=', $start)
+            ->where('captured_at', '<', $end)
             ->when($data['employee_id'] ?? null, fn ($q, $id) => $q->where('employee_id', $id))
-            ->when($data['state'] ?? null, fn ($q, $state) => $q->where('review_state', $state))
-            ->orderByDesc('captured_at')->paginate($perPage)->withQueryString();
+            ->when($data['state'] ?? null, fn ($q, $state) => $q->where('review_state', $state));
+        $this->applyAttendanceBranchScope($eventsQuery, $scope['effectiveBranchIds']);
+
+        $empListQuery = Employee::query()->orderBy('code');
+        if ($scope['effectiveBranchIds'] !== null) {
+            if ($scope['effectiveBranchIds'] === []) {
+                $empListQuery->whereRaw('1 = 0');
+            } else {
+                $empListQuery->whereIn('branch_id', $scope['effectiveBranchIds']);
+            }
+        }
+
         return view('admin.attendance.index', [
-            'events' => $events,
+            'events' => $eventsQuery->orderByDesc('captured_at')->paginate($perPage)->withQueryString(),
             'date' => $date,
             'perPage' => $perPage,
-            'employees' => Employee::orderBy('code')->get(),
+            'employees' => $empListQuery->get(),
+            'branches' => $scope['accessibleBranches'],
+            'regions' => Branch::REGIONS,
+            'selectedRegion' => $scope['selectedRegion'],
+            'selectedBranchId' => $scope['selectedBranchId'],
         ]);
     }
-    public function image(AttendanceEvent $event)
+
+    public function image(Request $request, AttendanceEvent $event)
     {
+        $eventBranchId = $event->branch_id ?? $event->employee?->branch_id;
+        abort_unless($request->user()->canAccessBranch($eventBranchId), 403);
         abort_unless($event->image_path && Storage::disk('local')->exists($event->image_path), 404);
+
         return response()->file(Storage::disk('local')->path($event->image_path), [
-            'Content-Type' => 'image/jpeg', 'Cache-Control' => 'private, no-store, max-age=0',
-            'X-Content-Type-Options' => 'nosniff', 'Content-Disposition' => 'inline',
+            'Content-Type' => 'image/jpeg',
+            'Cache-Control' => 'private, no-store, max-age=0',
+            'X-Content-Type-Options' => 'nosniff',
+            'Content-Disposition' => 'inline',
         ]);
     }
+
     public function review(Request $request, AttendanceEvent $event)
     {
-        $data = $request->validate(['decision' => ['required', 'in:accepted,rejected'], 'reason' => ['required','string','min:5','max:500']]);
+        $eventBranchId = $event->branch_id ?? $event->employee?->branch_id;
+        abort_unless($request->user()->canAccessBranch($eventBranchId), 403, 'Bạn không có quyền xét duyệt lượt chấm công của chi nhánh khác.');
+        $data = $request->validate(['decision' => ['required', 'in:accepted,rejected'], 'reason' => ['required', 'string', 'min:5', 'max:500']]);
         abort_unless($event->review_state === 'pending_review', 422, 'Chỉ xét duyệt sự kiện chờ.');
         $event->update(['review_state' => $data['decision']]);
-        AuditLog::create(['user_id' => $request->user()->id, 'action' => 'attendance.review',
-            'subject_type' => 'attendance_event', 'subject_id' => (string)$event->id,
-            'details' => ['from' => 'pending_review', 'to' => $data['decision'], 'reason' => $data['reason']]]);
+        AuditLog::create([
+            'user_id' => $request->user()->id,
+            'action' => 'attendance.review',
+            'subject_type' => 'attendance_event',
+            'subject_id' => (string) $event->id,
+            'details' => ['from' => 'pending_review', 'to' => $data['decision'], 'reason' => $data['reason']],
+        ]);
+
         return back()->with('success', 'Đã lưu quyết định xét duyệt.');
     }
 }
