@@ -80,7 +80,7 @@ final class RecognitionCoordinator: ObservableObject {
             do {
                 let act = try await api.activateDevice(hardwareID: hardwareID, deviceModel: deviceModelName)
                 if act.status == "approved", let tok = act.token, !tok.isEmpty {
-                    _ = DeviceTokenStore.save(tok)
+                    DeviceTokenStore.save(tok)
                     registrationStatus = "Đã tự động kích hoạt thiết bị."
                 } else {
                     registrationStatus = act.message ?? "Thiết bị chưa được duyệt."
@@ -126,7 +126,7 @@ final class RecognitionCoordinator: ObservableObject {
             let res = try await api.registerDevice(hardwareID: hardwareID, name: deviceName, deviceModel: deviceModelName)
             registrationStatus = res.message ?? res.status
             if res.status == "approved", let tok = res.token, !tok.isEmpty {
-                _ = DeviceTokenStore.save(tok)
+                DeviceTokenStore.save(tok)
                 await connect()
             } else if res.status == "pending" {
                 startApprovalPolling()
@@ -145,7 +145,7 @@ final class RecognitionCoordinator: ObservableObject {
                 if Task.isCancelled { break }
                 if let res = try? await api.activateDevice(hardwareID: hardwareID, deviceModel: deviceModelName) {
                     if res.status == "approved", let tok = res.token, !tok.isEmpty {
-                        _ = DeviceTokenStore.save(tok)
+                        DeviceTokenStore.save(tok)
                         registrationStatus = "Quản trị viên đã duyệt! Đang kết nối..."
                         isPollingApproval = false
                         await connect()
@@ -348,7 +348,7 @@ final class RecognitionCoordinator: ObservableObject {
         // Geofence client-side pre-check before uploading
         let loc = locationService.currentLocation
         if let branch = info.branch, branch.hasEnforcedGeofence, let limit = branch.allowed_radius_meters {
-            guard let loc else {
+            guard loc != nil else {
                 headline = "Chưa có tín hiệu GPS"
                 message = AppError.locationUnavailable.localizedDescription
                 working = false

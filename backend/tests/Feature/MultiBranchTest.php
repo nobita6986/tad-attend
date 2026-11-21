@@ -337,7 +337,7 @@ class MultiBranchTest extends TestCase
             'enrolled_at' => now('UTC'),
         ]);
 
-        $token = 'geofence-device-secret-token-1234567890';
+        $token = 'geofence-device-secret-token-123456789012';
         Device::create([
             'branch_id' => $hn->id,
             'name' => 'iPhone Cổng HN',

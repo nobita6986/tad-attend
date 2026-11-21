@@ -407,7 +407,7 @@ struct ContentView: View {
                     Button("Lưu & Kết nối lại") {
                         UserDefaults.standard.set(serverURL.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "baseURL")
                         if !newToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            _ = DeviceTokenStore.save(newToken.trimmingCharacters(in: .whitespacesAndNewlines))
+                            DeviceTokenStore.save(newToken.trimmingCharacters(in: .whitespacesAndNewlines))
                             newToken = ""
                         }
                         Task { await coordinator.connect() }
