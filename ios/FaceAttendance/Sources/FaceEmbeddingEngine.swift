@@ -5,9 +5,6 @@ import Foundation
 import ImageIO
 import UIKit
 import Vision
-#if canImport(onnxruntime_objc)
-import onnxruntime_objc
-#endif
 
 struct FaceResult {
     let embedding: [Double]
@@ -15,10 +12,10 @@ struct FaceResult {
 }
 
 /// Cross-platform SFace face-embedding engine (100% compatible with Android `SFaceEngine.kt`):
-/// 1. Primary: OpenCV Zoo `face_recognition_sface_2021dec.onnx` via ONNX Runtime (`OnnxRuntimeBindings`)
-///    with 5-point Umeyama similarity alignment to 112x112 canonical template, RGB [0..255] NCHW float32 -> 128-dim L2-normalized.
-/// 2. Secondary: Bundled Core ML `FaceEmbedding.mlmodelc` if present.
-/// 3. Last-resort fallback: Apple Vision feature print (only if ONNX model is missing in dev builds).
+/// - Runs OpenCV Zoo `face_recognition_sface_2021dec` converted to Core ML (`FaceEmbedding.mlmodelc`)
+///   on Apple Neural Engine / GPU.
+/// - Exact 5-point Umeyama similarity alignment to 112x112 canonical template,
+///   RGB [0..255] float32 NCHW [1, 3, 112, 112] -> 128-dim L2-normalized embedding.
 final class FaceEmbeddingEngine {
     static let inputSize = 112
 
@@ -32,53 +29,30 @@ final class FaceEmbeddingEngine {
         CGPoint(x: 70.7299, y: 92.2041), // image-right mouth corner
     ]
 
-    #if canImport(onnxruntime_objc)
-    private var ortEnv: ORTEnv?
-    private var ortSession: ORTSession?
-    private var ortInputName: String?
-    private var ortOutputName: String?
-    #endif
-
     private let coreMLModel: MLModel?
+    private let inputFeatureName: String?
+    private let outputFeatureName: String?
     private let targetDimensions: Int
     private let context = CIContext(options: [.useSoftwareRenderer: false])
 
     init(targetDimensions: Int = 128) {
         self.targetDimensions = max(16, targetDimensions)
 
-        #if canImport(onnxruntime_objc)
-        if let onnxPath = Bundle.main.path(forResource: "face_recognition_sface_2021dec", ofType: "onnx"),
-           let env = try? ORTEnv(loggingLevel: .warning),
-           let opts = try? ORTSessionOptions() {
-            _ = try? opts.setIntraOpNumThreads(2)
-            _ = try? opts.setGraphOptimizationLevel(.all)
-            if let session = try? ORTSession(env: env, modelPath: onnxPath, sessionOptions: opts),
-               let inName = try? session.inputNames().first,
-               let outName = try? session.outputNames().first {
-                self.ortEnv = env
-                self.ortSession = session
-                self.ortInputName = inName
-                self.ortOutputName = outName
-            }
-        }
-        #endif
+        let config = MLModelConfiguration()
+        config.computeUnits = .all
 
         if let url = Bundle.main.url(forResource: "FaceEmbedding", withExtension: "mlmodelc"),
-           let loaded = try? MLModel(contentsOf: url),
-           loaded.modelDescription.inputDescriptionsByName["image"]?.imageConstraint != nil,
-           loaded.modelDescription.outputDescriptionsByName["embedding"]?.multiArrayConstraint != nil {
+           let loaded = try? MLModel(contentsOf: url, configuration: config),
+           let inName = loaded.modelDescription.inputDescriptionsByName.keys.first,
+           let outName = loaded.modelDescription.outputDescriptionsByName.keys.first {
             self.coreMLModel = loaded
+            self.inputFeatureName = inName
+            self.outputFeatureName = outName
         } else {
             self.coreMLModel = nil
+            self.inputFeatureName = nil
+            self.outputFeatureName = nil
         }
-    }
-
-    var usesSFaceONNX: Bool {
-        #if canImport(onnxruntime_objc)
-        return ortSession != nil
-        #else
-        return false
-        #endif
     }
 
     var usesBundledCoreML: Bool { coreMLModel != nil }
@@ -101,7 +75,7 @@ final class FaceEmbeddingEngine {
             throw AppError.noSingleFace
         }
 
-        // Evidence crop around the detected face (bottom-left Vision coords -> CIImage coords)
+        // Evidence crop around the detected face
         var cropRect = VNImageRectForNormalizedRect(face.boundingBox, width, height)
         let padX = cropRect.width * 0.22
         let padY = cropRect.height * 0.22
@@ -112,27 +86,17 @@ final class FaceEmbeddingEngine {
         let croppedCI = ciImage.cropped(to: cropRect)
 
         let rawVector: [Double]
-        #if canImport(onnxruntime_objc)
-        if let session = ortSession, let inputName = ortInputName, let outputName = ortOutputName {
+        if let model = coreMLModel, let inName = inputFeatureName, let outName = outputFeatureName {
             let alignedRGBA = try alignFaceTo112RGBA(cgImage: cgImage, face: face)
-            rawVector = try extractSFaceONNX(
-                session: session,
-                inputName: inputName,
-                outputName: outputName,
+            rawVector = try extractSFaceCoreML(
+                model: model,
+                inputName: inName,
+                outputName: outName,
                 rgba112: alignedRGBA
             )
-        } else if let coreMLModel {
-            rawVector = try extractCoreML(model: coreMLModel, crop: croppedCI)
         } else {
             rawVector = try extractVisionFeaturePrint(crop: croppedCI)
         }
-        #else
-        if let coreMLModel {
-            rawVector = try extractCoreML(model: coreMLModel, crop: croppedCI)
-        } else {
-            rawVector = try extractVisionFeaturePrint(crop: croppedCI)
-        }
-        #endif
 
         let projected = Self.project(rawVector, to: targetDimensions)
         let vector = try Self.normalize(projected)
@@ -171,7 +135,6 @@ final class FaceEmbeddingEngine {
             return CGPoint(x: sum.x / CGFloat(pts.count), y: sum.y / CGFloat(pts.count))
         }
 
-        // Convert Vision bottom-left pixel coordinates to top-left pixel coordinates
         func toTopLeft(_ p: CGPoint) -> CGPoint {
             CGPoint(x: p.x, y: CGFloat(height) - p.y)
         }
@@ -205,12 +168,9 @@ final class FaceEmbeddingEngine {
         }
 
         ctx.interpolationQuality = .high
-        // Work in top-left destination coordinates (0..112)
         ctx.translateBy(x: 0, y: CGFloat(size))
         ctx.scaleBy(x: 1, y: -1)
-        // Apply 2D similarity warp (src top-left -> dst 112x112 top-left)
         ctx.concatenate(transform)
-        // Flip locally so CGContext.draw maps cgImage bottom-left -> top-left src space
         ctx.translateBy(x: 0, y: CGFloat(height))
         ctx.scaleBy(x: 1, y: -1)
         ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
@@ -230,8 +190,6 @@ final class FaceEmbeddingEngine {
         return [imgLeftEye, imgRightEye, nose, imgLeftMouth, imgRightMouth]
     }
 
-    /// Closed-form 2D similarity transform (Umeyama 2D) mapping `src` -> `dst`.
-    /// Returns CGAffineTransform where x' = a*x - b*y + tx, y' = b*x + a*y + ty.
     static func estimateSimilarityTransform(src: [CGPoint], dst: [CGPoint] = sfaceTemplate) throws -> CGAffineTransform {
         guard src.count == dst.count, src.count >= 2 else { throw AppError.noSingleFace }
         let n = Double(src.count)
@@ -265,11 +223,10 @@ final class FaceEmbeddingEngine {
         return CGAffineTransform(a: a, b: b, c: -b, d: a, tx: tx, ty: ty)
     }
 
-    // MARK: - SFace ONNX Inference
+    // MARK: - SFace Core ML Inference (NCHW RGB [0..255] float32 -> 128-dim)
 
-    #if canImport(onnxruntime_objc)
-    private func extractSFaceONNX(
-        session: ORTSession,
+    private func extractSFaceCoreML(
+        model: MLModel,
         inputName: String,
         outputName: String,
         rgba112: [UInt8]
@@ -278,51 +235,24 @@ final class FaceEmbeddingEngine {
         let pixelCount = size * size
         guard rgba112.count == pixelCount * 4 else { throw AppError.badModelIO }
 
-        // OpenCV FaceRecognizerSFImpl & Android SFaceEngine.kt:
-        // NCHW RGB float32 in [0, 255], mean 0, scale 1.0
-        var floats = [Float](repeating: 0, count: 3 * pixelCount)
+        let multiArray = try MLMultiArray(
+            shape: [1, 3, NSNumber(value: size), NSNumber(value: size)],
+            dataType: .float32
+        )
+        let ptr = multiArray.dataPointer.assumingMemoryBound(to: Float32.self)
         for i in 0..<pixelCount {
             let base = i * 4
-            floats[i] = Float(rgba112[base])
-            floats[pixelCount + i] = Float(rgba112[base + 1])
-            floats[2 * pixelCount + i] = Float(rgba112[base + 2])
+            ptr[i] = Float32(rgba112[base])
+            ptr[pixelCount + i] = Float32(rgba112[base + 1])
+            ptr[2 * pixelCount + i] = Float32(rgba112[base + 2])
         }
 
-        let inputBytes = floats.withUnsafeBytes { Data($0) }
-        let inputTensor = try ORTValue(
-            tensorData: NSMutableData(data: inputBytes),
-            elementType: .float,
-            shape: [1, 3, NSNumber(value: size), NSNumber(value: size)]
-        )
-
-        let outputs = try session.run(
-            withInputs: [inputName: inputTensor],
-            outputNames: Set([outputName]),
-            runOptions: nil
-        )
-        guard let outVal = outputs[outputName] else { throw AppError.badModelIO }
-        let outData = try outVal.tensorData() as Data
-        let floatCount = outData.count / MemoryLayout<Float>.size
-        guard floatCount >= 16 else { throw AppError.badEmbedding }
-
-        let rawFloats: [Float] = outData.withUnsafeBytes { raw in
-            let ptr = raw.bindMemory(to: Float.self)
-            return Array(ptr.prefix(floatCount))
-        }
-        return rawFloats.map { Double($0) }
-    }
-    #endif
-
-    // MARK: - CoreML & Vision Fallbacks
-
-    private func extractCoreML(model: MLModel, crop: CIImage) throws -> [Double] {
-        let input = try makeInput(crop)
-        let provider = try MLDictionaryFeatureProvider(dictionary: ["image": MLFeatureValue(pixelBuffer: input)])
+        let provider = try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(multiArray: multiArray)])
         let prediction = try model.prediction(from: provider)
-        guard let array = prediction.featureValue(for: "embedding")?.multiArrayValue, array.count > 0 else {
+        guard let outArray = prediction.featureValue(for: outputName)?.multiArrayValue, outArray.count >= 16 else {
             throw AppError.badModelIO
         }
-        return (0..<array.count).map { array[$0].doubleValue }
+        return (0..<outArray.count).map { outArray[$0].doubleValue }
     }
 
     private func extractVisionFeaturePrint(crop: CIImage) throws -> [Double] {
@@ -358,23 +288,6 @@ final class FaceEmbeddingEngine {
             }
         }
         return out
-    }
-
-    private func makeInput(_ image: CIImage) throws -> CVPixelBuffer {
-        var buffer: CVPixelBuffer?
-        let attrs: [CFString: Any] = [
-            kCVPixelBufferCGImageCompatibilityKey: true,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
-        ]
-        let code = CVPixelBufferCreate(kCFAllocatorDefault, 112, 112, kCVPixelFormatType_32BGRA,
-                                       attrs as CFDictionary, &buffer)
-        guard code == kCVReturnSuccess, let buffer else { throw AppError.badModelIO }
-        let shifted = image.transformed(by: CGAffineTransform(translationX: -image.extent.minX, y: -image.extent.minY))
-        let resized = shifted.transformed(by: CGAffineTransform(scaleX: 112 / image.extent.width,
-                                                                y: 112 / image.extent.height))
-        context.render(resized, to: buffer, bounds: CGRect(x: 0, y: 0, width: 112, height: 112),
-                       colorSpace: CGColorSpaceCreateDeviceRGB())
-        return buffer
     }
 
     private func makeJPEG(_ cropped: CIImage) throws -> Data {

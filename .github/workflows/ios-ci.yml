@@ -35,7 +35,6 @@ concurrency:
 
 env:
   PROJECT: FaceAttendance.xcodeproj
-  WORKSPACE: FaceAttendance.xcworkspace
   SCHEME: FaceAttendance
   APP_NAME: FaceAttendance
   SFACE_URL: https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
@@ -80,39 +79,61 @@ jobs:
           echo "build_number=$BUILD_NUM" >> "$GITHUB_OUTPUT"
           echo "Version: $RAW_TAG (marketing $MARKETING_VER, build $BUILD_NUM)"
 
-      - name: Cache OpenCV Zoo SFace ONNX model
+      - name: Cache Core ML SFace model (FaceEmbedding.mlpackage)
+        id: cache_coreml
         uses: actions/cache@v4
         with:
-          path: ios/FaceAttendance/Resources/face_recognition_sface_2021dec.onnx
-          key: sface-onnx-${{ env.SFACE_SHA256 }}
+          path: ios/FaceAttendance/Resources/FaceEmbedding.mlpackage
+          key: sface-coreml-v1-${{ env.SFACE_SHA256 }}
 
-      - name: Download & verify OpenCV Zoo SFace ONNX model (100% compatible with Android)
+      - name: Convert OpenCV Zoo SFace ONNX -> Core ML (100% compatible with Android)
+        if: steps.cache_coreml.outputs.cache-hit != 'true'
         run: |
-          MODEL="ios/FaceAttendance/Resources/face_recognition_sface_2021dec.onnx"
-          mkdir -p "$(dirname "$MODEL")"
-          if [ -f "$MODEL" ] && [ "$(shasum -a 256 "$MODEL" | awk '{print $1}')" = "$SFACE_SHA256" ]; then
-            echo "SFace ONNX model cache hit & verified."
-          else
-            echo "Downloading SFace ONNX model..."
-            curl -fL --retry 3 "$SFACE_URL" -o "${MODEL}.tmp"
-            ACTUAL="$(shasum -a 256 "${MODEL}.tmp" | awk '{print $1}')"
-            if [ "$ACTUAL" != "$SFACE_SHA256" ]; then
-              rm -f "${MODEL}.tmp"
-              echo "::error::SFace SHA-256 mismatch! expected=$SFACE_SHA256 actual=$ACTUAL"
-              exit 1
-            fi
-            mv "${MODEL}.tmp" "$MODEL"
-            echo "SFace ONNX model downloaded & verified."
+          ONNX="$RUNNER_TEMP/face_recognition_sface_2021dec.onnx"
+          echo "Downloading SFace ONNX model..."
+          curl -fL --retry 3 "$SFACE_URL" -o "$ONNX"
+          ACTUAL="$(shasum -a 256 "$ONNX" | awk '{print $1}')"
+          if [ "$ACTUAL" != "$SFACE_SHA256" ]; then
+            echo "::error::SFace SHA-256 mismatch! expected=$SFACE_SHA256 actual=$ACTUAL"
+            exit 1
           fi
-          ls -lh "$MODEL"
+          python3 -m venv "$RUNNER_TEMP/coreml-venv"
+          source "$RUNNER_TEMP/coreml-venv/bin/activate"
+          pip install --quiet --upgrade pip
+          pip install --quiet "numpy<2" onnx onnx2torch torch coremltools
+          python3 - "$ONNX" "ios/FaceAttendance/Resources/FaceEmbedding.mlpackage" <<'PY'
+          import sys, numpy as np, torch, coremltools as ct
+          from onnx2torch import convert
 
-      - name: Install XcodeGen, generate project & install CocoaPods (ONNX Runtime)
+          onnx_path, out_path = sys.argv[1], sys.argv[2]
+          pt_model = convert(onnx_path).eval()
+          dummy = torch.randn(1, 3, 112, 112, dtype=torch.float32) * 127.0 + 128.0
+          with torch.no_grad():
+              pt_out = pt_model(dummy).numpy().reshape(-1)
+          traced = torch.jit.trace(pt_model, dummy)
+          mlmodel = ct.convert(
+              traced,
+              inputs=[ct.TensorType(name="input", shape=(1, 3, 112, 112), dtype=np.float32)],
+              outputs=[ct.TensorType(name="embedding", dtype=np.float32)],
+              minimum_deployment_target=ct.target.iOS16,
+              compute_precision=ct.precision.FLOAT16,
+          )
+          mlmodel.save(out_path)
+          # Verify Core ML output matches PyTorch/ONNX with cosine similarity >= 0.999
+          cm_out = mlmodel.predict({"input": dummy.numpy()})["embedding"].reshape(-1)
+          cos = float(np.dot(pt_out, cm_out) / (np.linalg.norm(pt_out) * np.linalg.norm(cm_out)))
+          print(f"Core ML SFace verified: dim={len(cm_out)}, cosine_vs_onnx={cos:.6f}")
+          assert len(cm_out) == 128 and cos >= 0.999, f"Unexpected Core ML output: dim={len(cm_out)}, cos={cos}"
+          PY
+          rm -rf "$ONNX" "$RUNNER_TEMP/coreml-venv"
+          du -sh ios/FaceAttendance/Resources/FaceEmbedding.mlpackage
+
+      - name: Install XcodeGen & generate Xcode project
         working-directory: ios
         run: |
           command -v xcodegen >/dev/null 2>&1 || brew install xcodegen
           xcodegen generate
-          pod install --repo-update
-          xcodebuild -list -workspace "$WORKSPACE"
+          xcodebuild -list -project "$PROJECT"
 
       - name: Build Release (unsigned, generic iOS device)
         working-directory: ios
@@ -120,7 +141,7 @@ jobs:
           set -o pipefail
           mkdir -p build
           xcodebuild build \
-            -workspace "$WORKSPACE" \
+            -project "$PROJECT" \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
@@ -220,7 +241,7 @@ jobs:
           </plist>
           EOF
           xcodebuild archive \
-            -workspace "$WORKSPACE" \
+            -project "$PROJECT" \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination "generic/platform=iOS" \
