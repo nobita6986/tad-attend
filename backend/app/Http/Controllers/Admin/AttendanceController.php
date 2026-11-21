@@ -20,6 +20,8 @@ class AttendanceController extends Controller
         $scope = $this->resolveBranchFilter($request);
         $data = $request->validate([
             'date' => ['nullable', 'date_format:Y-m-d'],
+            'from' => ['nullable', 'date_format:Y-m-d'],
+            'to' => ['nullable', 'date_format:Y-m-d'],
             'employee_id' => ['nullable', 'integer', 'exists:employees,id'],
             'state' => ['nullable', 'in:accepted,pending_review,rejected'],
         ]);
@@ -29,9 +31,25 @@ class AttendanceController extends Controller
             abort_unless($request->user()->canAccessBranch($emp->branch_id), 403, 'Bạn không có quyền xem chấm công nhân viên chi nhánh khác.');
         }
 
-        $date = $data['date'] ?? CarbonImmutable::now(config('attendance.timezone'))->format('Y-m-d');
-        $start = CarbonImmutable::parse($date, config('attendance.timezone'))->startOfDay()->utc();
-        $end = CarbonImmutable::parse($date, config('attendance.timezone'))->addDay()->startOfDay()->utc();
+        $tz = config('attendance.timezone');
+        $today = CarbonImmutable::now($tz);
+        if (!empty($data['from']) || !empty($data['to'])) {
+            $from = $data['from'] ?? $data['to'];
+            $to = $data['to'] ?? $data['from'];
+        } elseif (!empty($data['date'])) {
+            // Backward compatibility with legacy ?date=YYYY-MM-DD links
+            $from = $data['date'];
+            $to = $data['date'];
+        } else {
+            // Default: Tháng này (từ đầu tháng đến hôm nay)
+            $from = $today->startOfMonth()->format('Y-m-d');
+            $to = $today->format('Y-m-d');
+        }
+        abort_if($from > $to, 422, 'Ngày bắt đầu phải trước ngày kết thúc.');
+        abort_if(CarbonImmutable::parse($from)->diffInDays(CarbonImmutable::parse($to)) > 93, 422, 'Khoảng tra cứu không quá 93 ngày.');
+
+        $start = CarbonImmutable::parse($from, $tz)->startOfDay()->utc();
+        $end = CarbonImmutable::parse($to, $tz)->addDay()->startOfDay()->utc();
         $perPage = (int) $request->query('per_page', 30);
         if (!in_array($perPage, [20, 30, 50, 100], true)) {
             $perPage = 30;
@@ -55,7 +73,9 @@ class AttendanceController extends Controller
 
         return view('admin.attendance.index', [
             'events' => $eventsQuery->orderByDesc('captured_at')->paginate($perPage)->withQueryString(),
-            'date' => $date,
+            'from' => $from,
+            'to' => $to,
+            'date' => $to,
             'perPage' => $perPage,
             'employees' => $empListQuery->get(),
             'branches' => $scope['accessibleBranches'],

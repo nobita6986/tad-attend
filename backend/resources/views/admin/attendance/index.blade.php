@@ -15,10 +15,20 @@
 </div>
 
 <section class="card">
+  <x-date-presets
+    :from="$from"
+    :to="$to"
+    route="admin.attendance.index"
+    :preserve="['branch_id', 'employee_id', 'state', 'per_page']"
+  />
   <form method="get" class="form-grid" style="align-items:end">
     <div class="field">
-      <label for="filter-date">Ngày</label>
-      <input id="filter-date" type="date" name="date" value="{{ $date }}">
+      <label for="filter-from">Từ ngày</label>
+      <input id="filter-from" type="date" name="from" required value="{{ $from }}">
+    </div>
+    <div class="field">
+      <label for="filter-to">Đến ngày</label>
+      <input id="filter-to" type="date" name="to" required value="{{ $to }}">
     </div>
     @if($branches->count() > 1)
       <div class="field">
@@ -65,7 +75,14 @@
 
 <section class="card">
   <div class="card-head">
-    <h2><x-icon name="scan" :size="18" /> Kết quả ngày {{ \Carbon\CarbonImmutable::parse($date)->format('d/m/Y') }} ({{ $events->total() }} lượt)</h2>
+    <h2>
+      <x-icon name="scan" :size="18" />
+      @if($from === $to)
+        Kết quả ngày {{ \Carbon\CarbonImmutable::parse($from)->format('d/m/Y') }} ({{ $events->total() }} lượt)
+      @else
+        Kết quả từ {{ \Carbon\CarbonImmutable::parse($from)->format('d/m/Y') }} đến {{ \Carbon\CarbonImmutable::parse($to)->format('d/m/Y') }} ({{ $events->total() }} lượt)
+      @endif
+    </h2>
   </div>
 
   <div tabindex="0" role="region" aria-label="Bảng lượt chấm công" class="table-wrapper">
